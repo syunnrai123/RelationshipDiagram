@@ -9,9 +9,6 @@ import webbrowser
 import json
 import sys
 
-# --- 全局配置文件名 ---
-CONFIG_FILE = "relationship_diagram_config.json"
-
 
 # --- 辅助类：鼠标悬停提示 (不变) ---
 class ToolTip:
@@ -44,67 +41,109 @@ class UltimateBeautifiedApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("数据库关系图生成器 - 终极美化版 💎")
-        self.geometry("700x750")
+        self.geometry("700x850")
 
-        # ... (数据模型和UI创建逻辑与上一版相同) ...
         # --- 数据模型 ---
         self.db_entries = {}
         self.output_path = tk.StringVar()
         self.last_generated_file = None
+        self.config_file_path = tk.StringVar()
+
         self.graph_style = {
             'layout': tk.StringVar(), 'spline': tk.StringVar(), 'bg_color': tk.StringVar(),
             'node_color_default': tk.StringVar(), 'node_color_start': tk.StringVar(),
             'node_color_link': tk.StringVar(), 'node_color_end': tk.StringVar(),
         }
+
+        # --- 用于UI翻译的映射表 ---
+        self.layout_map = {'从上到下 (TB)': 'TB', '从左到右 (LR)': 'LR'}
+        self.spline_map = {'直角连线 (ortho)': 'ortho', '曲线 (curved)': 'curved', '样条曲线 (spline)': 'spline'}
+        # 反向映射，用于根据数据更新UI
+        self.layout_map_rev = {v: k for k, v in self.layout_map.items()}
+        self.spline_map_rev = {v: k for k, v in self.spline_map.items()}
+
         # --- 创建UI并加载配置 ---
         sv_ttk.set_theme("light")
         self._create_widgets()
+
+        default_config_path = os.path.join(sys.path[0], "relationship_diagram_config.json")
+        self.config_file_path.set(default_config_path)
         self._load_config()
-        # --- 绑定窗口关闭事件以保存配置 ---
+
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
 
-    # ... (除了 _render_graph 外，其他函数与上一版 StableApp 相同, 此处为简洁省略) ...
-    # --- 1. 配置持久化 (核心改进) ---
-    def _load_config(self):
-        self._log("正在加载配置...", "INFO")
+    # --- 1. 配置持久化 ---
+    def _load_config(self, filepath=None):
+        target_path = filepath or self.config_file_path.get()
+        self._log(f"正在从 {os.path.basename(target_path)} 加载配置...", "INFO")
+
         try:
-            with open(CONFIG_FILE, 'r') as f:
+            with open(target_path, 'r', encoding='utf-8') as f:
                 config = json.load(f)
 
-            # 加载数据库连接信息 (密码除外)
+            self.config_file_path.set(target_path)
             db_conf = config.get("database", {})
             for key, entry in self.db_entries.items():
                 if key != "密码":
                     entry.delete(0, tk.END)
                     entry.insert(0, db_conf.get(key, ''))
-
-            # 加载路径和样式
             self.output_path.set(config.get("output_path", os.getcwd()))
             style_conf = config.get("graph_style", {})
             for key, var in self.graph_style.items():
                 var.set(style_conf.get(key, self._get_default_styles()[key]))
-
             self._log("✅ 配置加载成功!", "SUCCESS")
         except (FileNotFoundError, json.JSONDecodeError):
-            self._log("未找到或配置文件无效，使用默认设置。", "INFO")
-            # 文件不存在或损坏时，加载默认值
-            self.output_path.set(os.getcwd())
-            default_styles = self._get_default_styles()
-            for key, var in self.graph_style.items():
-                var.set(default_styles[key])
+            self._log(f"未找到或配置文件无效，使用默认设置。", "INFO")
+            if not filepath:
+                self.output_path.set(os.getcwd())
+                default_styles = self._get_default_styles()
+                for key, var in self.graph_style.items():
+                    var.set(default_styles[key])
+            else:
+                self.after(0, lambda: messagebox.showwarning("加载失败", f"无法加载或解析文件：\n{target_path}"))
 
-    def _save_config(self):
-        self._log("正在保存配置...", "INFO")
+        self.after(0, self._update_ui_from_style_vars)
+
+    def _save_config(self, filepath=None):
+        target_path = filepath or self.config_file_path.get()
+        if not target_path:
+            self._log("配置文件路径为空，无法保存。", "ERROR")
+            return
+        self._log(f"正在保存配置到 {os.path.basename(target_path)}...", "INFO")
         db_conf = {key: entry.get() for key, entry in self.db_entries.items() if key != "密码"}
-
         config = {
             "database": db_conf,
             "output_path": self.output_path.get(),
             "graph_style": {key: var.get() for key, var in self.graph_style.items()},
         }
-        with open(CONFIG_FILE, 'w') as f:
-            json.dump(config, f, indent=4)
-        self._log("✅ 配置已保存。", "SUCCESS")
+        try:
+            with open(target_path, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=4, ensure_ascii=False)
+            self.config_file_path.set(target_path)
+            self._log("✅ 配置已保存。", "SUCCESS")
+        except Exception as e:
+            self._log(f"保存配置失败: {e}", "ERROR")
+            self.after(0, lambda: messagebox.showerror("保存失败", f"无法保存配置文件到：\n{target_path}\n\n错误: {e}"))
+
+    def _select_and_load_config(self):
+        path = filedialog.askopenfilename(
+            title="选择配置文件",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+            initialdir=os.path.dirname(self.config_file_path.get())
+        )
+        if path:
+            self._load_config(filepath=path)
+
+    def _save_config_as(self):
+        path = filedialog.asksaveasfilename(
+            title="将配置另存为...",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+            initialdir=os.path.dirname(self.config_file_path.get()),
+            defaultextension=".json",
+            initialfile="new_config.json"
+        )
+        if path:
+            self._save_config(filepath=path)
 
     def _on_closing(self):
         self._save_config()
@@ -117,15 +156,14 @@ class UltimateBeautifiedApp(tk.Tk):
             'node_color_link': '#D1FFBD', 'node_color_end': '#E0BBE4',
         }
 
-    # --- 2. UI创建 (与之前版本类似，但逻辑更清晰) ---
+    # --- 2. UI创建 ---
     def _create_widgets(self):
-        # ... 此部分UI代码与上版基本一致，为保证完整性，此处保留 ...
         notebook = ttk.Notebook(self)
         notebook.pack(fill="both", expand=True, padx=10, pady=10)
         main_tab = ttk.Frame(notebook)
         settings_tab = ttk.Frame(notebook)
         notebook.add(main_tab, text=' 🚀 生成器 ')
-        notebook.add(settings_tab, text=' 🎨 样式设置 ')
+        notebook.add(settings_tab, text=' 🎨 样式与配置 ')
         self._create_main_tab(main_tab)
         self._create_settings_tab(settings_tab)
 
@@ -182,28 +220,44 @@ class UltimateBeautifiedApp(tk.Tk):
         self.open_file_btn.pack(pady=5, fill="x")
 
     def _create_settings_tab(self, parent):
-        parent.columnconfigure(1, weight=1)
+        parent.columnconfigure(0, weight=1)
+
+        config_frame = ttk.LabelFrame(parent, text=" ⚙️ 配置文件管理")
+        config_frame.grid(row=0, column=0, padx=5, pady=10, sticky="ew")
+        config_frame.columnconfigure(0, weight=1)
+        config_path_entry = ttk.Entry(config_frame, textvariable=self.config_file_path, state="readonly")
+        config_path_entry.grid(row=0, column=0, padx=10, pady=8, sticky="ew")
+
+        # 【修正】将ToolTip实例附加到控件上，防止被垃圾回收
+        config_path_entry.tooltip = ToolTip(config_path_entry, "当前使用的配置文件路径。关闭程序时会自动保存到此路径。")
+
+        config_btn_frame = ttk.Frame(config_frame)
+        config_btn_frame.grid(row=0, column=1, padx=5, pady=5)
+        load_btn = ttk.Button(config_btn_frame, text="加载...", command=self._select_and_load_config)
+        load_btn.pack(side="left", padx=5)
+        save_as_btn = ttk.Button(config_btn_frame, text="另存为...", command=self._save_config_as)
+        save_as_btn.pack(side="left", padx=5)
+
         theme_frame = ttk.LabelFrame(parent, text=" 🎨 应用主题 ")
-        theme_frame.grid(row=0, column=0, columnspan=2, padx=5, pady=10, sticky="ew")
+        theme_frame.grid(row=1, column=0, padx=5, pady=10, sticky="ew")
         theme_switch = ttk.Checkbutton(theme_frame, text="切换为暗黑模式", style="Switch.TCheckbutton",
                                        command=lambda: sv_ttk.set_theme(
                                            "dark" if theme_switch.instate(['selected']) else "light"))
         theme_switch.pack(padx=10, pady=10)
 
         style_frame = ttk.LabelFrame(parent, text=" 🖌️ 图表样式配置 ")
-        style_frame.grid(row=1, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
+        style_frame.grid(row=2, column=0, padx=5, pady=5, sticky="ew")
         style_frame.columnconfigure(1, weight=1)
 
         ttk.Label(style_frame, text="布局方向:").grid(row=0, column=0, padx=10, pady=8, sticky="w")
-        ttk.OptionMenu(style_frame, self.graph_style['layout'], 'TB', 'TB', 'LR').grid(row=0, column=1, padx=10, pady=8,
-                                                                                       sticky="w")
+        self.layout_combo = ttk.Combobox(style_frame, state="readonly", values=list(self.layout_map.keys()), width=15)
+        self.layout_combo.grid(row=0, column=1, padx=10, pady=8, sticky="w")
+        self.layout_combo.bind("<<ComboboxSelected>>", self._on_style_changed)
 
         ttk.Label(style_frame, text="连线样式:").grid(row=1, column=0, padx=10, pady=8, sticky="w")
-        ttk.OptionMenu(style_frame, self.graph_style['spline'], 'ortho', 'ortho', 'curved', 'spline').grid(row=1,
-                                                                                                           column=1,
-                                                                                                           padx=10,
-                                                                                                           pady=8,
-                                                                                                           sticky="w")
+        self.spline_combo = ttk.Combobox(style_frame, state="readonly", values=list(self.spline_map.keys()), width=15)
+        self.spline_combo.grid(row=1, column=1, padx=10, pady=8, sticky="w")
+        self.spline_combo.bind("<<ComboboxSelected>>", self._on_style_changed)
 
         colors_map = [("背景色", 'bg_color'), ("默认节点色", 'node_color_default'), ("起始节点色", 'node_color_start'),
                       ("中间节点色", 'node_color_link'), ("末端节点色", 'node_color_end')]
@@ -213,11 +267,34 @@ class UltimateBeautifiedApp(tk.Tk):
             color_btn.grid(row=i, column=2, padx=10, pady=5)
             color_preview = tk.Label(style_frame, textvariable=self.graph_style[key], relief="sunken", width=10)
             color_preview.grid(row=i, column=1, padx=10, pady=5, sticky="w")
-            # 使用 trace_add 的 'write' 回调来动态更新背景色
             self.graph_style[key].trace_add("write", lambda name, index, mode, var=self.graph_style[key],
                                                             label=color_preview: label.config(bg=var.get()))
 
-    # --- 3. 核心逻辑 (重构线程和UI交互) ---
+    # --- 3. 核心逻辑 ---
+    def _on_style_changed(self, event):
+        widget = event.widget
+        if widget == self.layout_combo:
+            selected_display = self.layout_combo.get()
+            backend_value = self.layout_map.get(selected_display)
+            if backend_value:
+                self.graph_style['layout'].set(backend_value)
+        elif widget == self.spline_combo:
+            selected_display = self.spline_combo.get()
+            backend_value = self.spline_map.get(selected_display)
+            if backend_value:
+                self.graph_style['spline'].set(backend_value)
+
+    def _update_ui_from_style_vars(self):
+        layout_backend_value = self.graph_style['layout'].get()
+        layout_display_value = self.layout_map_rev.get(layout_backend_value)
+        if layout_display_value:
+            self.layout_combo.set(layout_display_value)
+
+        spline_backend_value = self.graph_style['spline'].get()
+        spline_display_value = self.spline_map_rev.get(spline_backend_value)
+        if spline_display_value:
+            self.spline_combo.set(spline_display_value)
+
     def _choose_color(self, key):
         color_code = colorchooser.askcolor(title="选择颜色", initialcolor=self.graph_style[key].get())
         if color_code[1]: self.graph_style[key].set(color_code[1])
@@ -269,7 +346,6 @@ class UltimateBeautifiedApp(tk.Tk):
             password=details['密码'], database=details['数据库'], cursorclass=pymysql.cursors.DictCursor
         )
 
-    # --- 测试连接 ---
     def _test_connection(self):
         self._run_threaded(self._execute_test_connection)
 
@@ -286,7 +362,6 @@ class UltimateBeautifiedApp(tk.Tk):
         finally:
             self._toggle_controls("normal")
 
-    # --- 生成图表 (主功能修复) ---
     def _run_generation(self, generation_method):
         self._run_threaded(generation_method)
 
@@ -341,7 +416,7 @@ class UltimateBeautifiedApp(tk.Tk):
         finally:
             self._toggle_controls("normal")
 
-    # --- 渲染引擎 (核心优化) ---
+    # --- 渲染引擎 ---
     def _render_graph(self, relations, suffix, label):
         if not relations:
             self._log("未找到任何关系，任务中止。", "ERROR")
@@ -350,40 +425,19 @@ class UltimateBeautifiedApp(tk.Tk):
 
         self._log("开始渲染美化版图表...", "INFO")
         s = self.graph_style
-
-        # 1. 定义整体图表属性 (增加间距)
         graph_attrs = {
-            'rankdir': s['layout'].get(),
-            'bgcolor': s['bg_color'].get(),
-            'pad': '1.0',  # 增加图表整体内边距
-            'splines': s['spline'].get(),
-            'nodesep': '0.8',  # 节点间最小距离
-            'ranksep': '1.2',  # 层级间最小距离 (关键)
-            'label': f"\n{label}",  # 标题前加换行符，增加与顶部的距离
-            'fontsize': '22',
-            'fontname': 'Segoe UI,Verdana,Arial',  # 优先使用更清晰的字体
-            'fontcolor': '#333333',
-            'overlap': 'false'  # 禁止节点重叠
+            'rankdir': s['layout'].get(), 'bgcolor': s['bg_color'].get(), 'pad': '1.0',
+            'splines': s['spline'].get(), 'nodesep': '0.8', 'ranksep': '1.2',
+            'label': f"\n{label}", 'fontsize': '22', 'fontname': 'Segoe UI,Verdana,Arial',
+            'fontcolor': '#333333', 'overlap': 'false'
         }
-
-        # 2. 定义节点属性 (增加内部边距和边框)
         node_attrs = {
-            'style': 'filled,rounded',
-            'shape': 'box',
-            'fontname': 'Segoe UI,Verdana,Arial',
-            'fontsize': '14',  # 增大字体
-            'fontcolor': '#2D2D2D',  # 更深的字体颜色
-            'margin': '0.4',  # 节点内部文字与边框的距离 (关键)
-            'color': '#666666'  # 节点边框颜色
+            'style': 'filled,rounded', 'shape': 'box', 'fontname': 'Segoe UI,Verdana,Arial',
+            'fontsize': '14', 'fontcolor': '#2D2D2D', 'margin': '0.4', 'color': '#666666'
         }
-
-        # 3. 定义边/连接线属性
         edge_attrs = {
-            'color': '#757575',
-            'arrowsize': '0.9',
-            'penwidth': '1.5'  # 加粗线条
+            'color': '#757575', 'arrowsize': '0.9', 'penwidth': '1.5'
         }
-
         dot = Digraph(format="png", graph_attr=graph_attrs, node_attr=node_attrs, edge_attr=edge_attrs)
 
         all_nodes = set(sum(relations, ()));
