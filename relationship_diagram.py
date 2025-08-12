@@ -44,7 +44,7 @@ class UltimateBeautifiedApp(tk.Tk):
 
     def __init__(self):
         super().__init__()
-        self.title("数据库关系图生成器 - SQLAlchemy 最终稳定版  универсал 💎")
+        self.title("数据库关系图生成器")
         self.geometry("700x900")
 
         # --- 数据模型 ---
@@ -66,7 +66,16 @@ class UltimateBeautifiedApp(tk.Tk):
         sv_ttk.set_theme("light")
         self._create_widgets()
 
-        default_config_path = os.path.join(sys.path[0], "relationship_diagram_config.json")
+        # 判断程序是否被打包 (frozen)
+        if getattr(sys, 'frozen', False):
+            # 如果是打包后的EXE文件，则获取EXE文件所在的目录
+            application_path = os.path.dirname(sys.executable)
+        else:
+            # 如果是直接运行的.py脚本，则获取脚本所在的目录
+            application_path = os.path.dirname(os.path.abspath(__file__))
+
+        # 将默认配置文件路径设置在程序所在目录下
+        default_config_path = os.path.join(application_path, "relationship_diagram_config.json")
         self.config_file_path.set(default_config_path)
         self._load_config()
 
