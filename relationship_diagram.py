@@ -77,6 +77,11 @@ class UltimateBeautifiedApp(tk.Tk):
         self.ai_model_var = tk.StringVar(value="glm-4.5-flash")
         self.right_panel_view = tk.StringVar(value="ai")
 
+        # --- NEW: MySQL version selection for AI ---
+        self.mysql_version_var = tk.StringVar(value="MySQL 8.0+")
+
+        self.is_ai_running = False
+
         sv_ttk.set_theme("light")
         self._create_widgets()
 
@@ -157,25 +162,21 @@ class UltimateBeautifiedApp(tk.Tk):
                 'node_color_start': '#FFDDC1', 'node_color_link': '#D1FFBD', 'node_color_end': '#E0BBE4'}
 
     def _create_widgets(self):
-        # Main layout container
         main_pane = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
         main_pane.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # Create left and right panels
         left_panel = ttk.Frame(main_pane, width=600)
         right_panel = ttk.Frame(main_pane, width=600)
         main_pane.add(left_panel, weight=1)
         main_pane.add(right_panel, weight=1)
 
-        # Populate panels
         self._create_left_panel(left_panel)
         self._create_right_panel(right_panel)
 
     def _create_left_panel(self, parent):
         parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(1, weight=1)  # Make the middle section (step2) expandable
+        parent.rowconfigure(1, weight=1)
 
-        # --- Step 1: Database Connection ---
         step1_frame = ttk.LabelFrame(parent, text=" ❶ 连接到数据库服务器 ")
         step1_frame.grid(row=0, column=0, padx=(10, 0), pady=(5, 10), sticky="ew")
         step1_frame.columnconfigure(1, weight=1)
@@ -187,7 +188,7 @@ class UltimateBeautifiedApp(tk.Tk):
         self.db_type_combo.bind("<<ComboboxSelected>>", self._on_db_type_changed)
 
         labels = ["主机:", "端口:", "用户名:", "密码:"]
-        self.db_entries['数据库'] = ttk.Entry(parent)  # Hidden entry for SQLite path
+        self.db_entries['数据库'] = ttk.Entry(parent)
         for i, label_text in enumerate(labels, 1):
             key = label_text.strip(':');
             ttk.Label(step1_frame, text=label_text).grid(row=i, column=0, padx=10, pady=5, sticky="w")
@@ -196,7 +197,6 @@ class UltimateBeautifiedApp(tk.Tk):
             self.db_entries[key] = entry
             setattr(self, f"entry_{key}", entry)
 
-        # SQLite file selection button (conditionally shown)
         self.sqlite_file_frame = ttk.Frame(step1_frame)
         self.sqlite_file_frame.grid(row=len(labels) + 1, column=0, columnspan=3, padx=10, pady=5, sticky="ew")
         self.sqlite_file_frame.columnconfigure(1, weight=1)
@@ -210,13 +210,11 @@ class UltimateBeautifiedApp(tk.Tk):
                                       style="Accent.TButton")
         self.connect_btn.grid(row=len(labels) + 2, column=0, columnspan=3, padx=10, pady=10, sticky="ew")
 
-        # --- Step 2: Database and Table Selection ---
         step2_frame = ttk.LabelFrame(parent, text=" ❷ 选择数据库和表")
         step2_frame.grid(row=1, column=0, padx=(10, 0), pady=5, sticky="nsew")
         step2_frame.columnconfigure((0, 1), weight=1)
         step2_frame.rowconfigure(1, weight=1)
 
-        # Database List
         db_area_frame = ttk.Frame(step2_frame)
         db_area_frame.grid(row=0, column=0, rowspan=2, padx=(10, 5), pady=5, sticky="nsew")
         db_area_frame.columnconfigure(0, weight=1)
@@ -239,7 +237,6 @@ class UltimateBeautifiedApp(tk.Tk):
         self.db_listbox.config(yscrollcommand=db_scrollbar.set)
         self.db_listbox.bind("<<ListboxSelect>>", self._on_database_selected)
 
-        # Table List
         table_area_frame = ttk.Frame(step2_frame)
         table_area_frame.grid(row=0, column=1, rowspan=2, padx=(5, 10), pady=5, sticky="nsew")
         table_area_frame.columnconfigure(0, weight=1)
@@ -261,11 +258,9 @@ class UltimateBeautifiedApp(tk.Tk):
         table_scrollbar.grid(row=1, column=1, sticky="ns")
         self.table_listbox.config(yscrollcommand=table_scrollbar.set)
 
-        # --- Bottom Action Buttons ---
         bottom_actions_frame = ttk.Frame(parent)
         bottom_actions_frame.grid(row=2, column=0, padx=(10, 0), pady=10, sticky="ew")
 
-        # --- MODIFICATION: Use a Menubutton for generation options ---
         self.generate_menu_btn = ttk.Menubutton(bottom_actions_frame, text="🎨 生成关系图", style="Accent.TButton",
                                                 state="disabled")
         self.generate_menu_btn.pack(side="left", padx=(0, 5), fill="x", expand=True)
@@ -278,7 +273,6 @@ class UltimateBeautifiedApp(tk.Tk):
                                     command=lambda: self._run_generation(self._execute_generate_by_inference))
         ToolTip(self.generate_menu_btn, "选择生成关系图的方法")
 
-        # --- MODIFICATION: Removed "Output Directory" button from here ---
         self.open_output_dir_btn = ttk.Button(bottom_actions_frame, text="🚀 打开输出目录",
                                               command=self._open_output_directory)
         self.open_output_dir_btn.pack(side="left", padx=5)
@@ -294,7 +288,6 @@ class UltimateBeautifiedApp(tk.Tk):
         parent.columnconfigure(0, weight=1)
         parent.rowconfigure(1, weight=1)
 
-        # Header with toggle buttons
         header_frame = ttk.Frame(parent, style="Card.TFrame")
         header_frame.grid(row=0, column=0, padx=(0, 10), pady=(5, 0), sticky="ew")
 
@@ -305,22 +298,20 @@ class UltimateBeautifiedApp(tk.Tk):
                                     command=self._switch_right_panel, style="Toggle.TRadiobutton")
         ai_button.pack(side="left", padx=5, pady=5, expand=True, fill="x")
 
+        log_button = ttk.Radiobutton(header_frame, text="📈 生成与日志", variable=self.right_panel_view, value="log",
+                                     command=self._switch_right_panel, style="Toggle.TRadiobutton")
+        log_button.pack(side="left", padx=5, pady=5, expand=True, fill="x")
+
         settings_button = ttk.Radiobutton(header_frame, text="⚙️ 样式与配置", variable=self.right_panel_view,
                                           value="settings", command=self._switch_right_panel,
                                           style="Toggle.TRadiobutton")
         settings_button.pack(side="left", padx=5, pady=5, expand=True, fill="x")
 
-        log_button = ttk.Radiobutton(header_frame, text="📈 生成与日志", variable=self.right_panel_view, value="log",
-                                     command=self._switch_right_panel, style="Toggle.TRadiobutton")
-        log_button.pack(side="left", padx=5, pady=5, expand=True, fill="x")
-
-        # Content area
         content_area = ttk.Frame(parent)
         content_area.grid(row=1, column=0, padx=(0, 10), pady=(0, 5), sticky="nsew")
         content_area.grid_rowconfigure(0, weight=1)
         content_area.grid_columnconfigure(0, weight=1)
 
-        # Create content frames
         self.ai_frame = ttk.Frame(content_area)
         self.settings_frame = ttk.Frame(content_area)
         self.log_frame = ttk.Frame(content_area)
@@ -329,12 +320,10 @@ class UltimateBeautifiedApp(tk.Tk):
         self.settings_frame.grid(row=0, column=0, sticky="nsew")
         self.log_frame.grid(row=0, column=0, sticky="nsew")
 
-        # Populate content frames
         self._create_ai_query_panel(self.ai_frame)
         self._create_settings_panel(self.settings_frame)
         self._create_log_panel(self.log_frame)
 
-        # Initial view
         self._switch_right_panel()
 
     def _switch_right_panel(self):
@@ -348,10 +337,9 @@ class UltimateBeautifiedApp(tk.Tk):
 
     def _create_ai_query_panel(self, parent):
         parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(1, weight=2)  # Input text area
-        parent.rowconfigure(3, weight=3)  # Output text area
+        parent.rowconfigure(1, weight=2)
+        parent.rowconfigure(3, weight=3)
 
-        # --- Model and API Configuration ---
         config_frame = ttk.LabelFrame(parent, text="模型与 API 配置")
         config_frame.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="ew")
         config_frame.columnconfigure(1, weight=1)
@@ -361,12 +349,19 @@ class UltimateBeautifiedApp(tk.Tk):
         model_combo.grid(row=0, column=1, padx=0, pady=8, sticky="ew")
         ToolTip(model_combo, "选择预设模型或手动输入新模型名称")
 
-        ttk.Label(config_frame, text="ZhipuAI API Key:").grid(row=1, column=0, padx=(10, 5), pady=8, sticky="w")
+        # --- NEW: MySQL Version Selector ---
+        self.mysql_version_label = ttk.Label(config_frame, text="MySQL 版本:")
+        self.mysql_version_label.grid(row=1, column=0, padx=(10, 5), pady=8, sticky="w")
+        self.mysql_version_combo = ttk.Combobox(config_frame, textvariable=self.mysql_version_var, state="readonly",
+                                                values=["MySQL 8.0+", "MySQL 5.7"])
+        self.mysql_version_combo.grid(row=1, column=1, padx=0, pady=8, sticky="ew")
+        ToolTip(self.mysql_version_combo, "选择目标MySQL版本以确保SQL兼容性")
+
+        ttk.Label(config_frame, text="ZhipuAI API Key:").grid(row=2, column=0, padx=(10, 5), pady=8, sticky="w")
         api_key_entry = ttk.Entry(config_frame, textvariable=self.zhipu_api_key, show="*")
-        api_key_entry.grid(row=1, column=1, padx=0, pady=8, sticky="ew")
+        api_key_entry.grid(row=2, column=1, padx=0, pady=8, sticky="ew")
         ToolTip(api_key_entry, "在此输入您的ZhipuAI API Key。配置将自动保存在'样式与配置'中管理的文件里。")
 
-        # --- Target Structure Input ---
         input_frame = ttk.LabelFrame(parent, text="目标数据结构 (JSON / Java DTO/VO)")
         input_frame.grid(row=1, column=0, padx=10, pady=5, sticky="nsew")
         input_frame.columnconfigure(0, weight=1);
@@ -393,12 +388,10 @@ public class DishFlavor implements Serializable {
     private String value;
 }''')
 
-        # --- Action Button ---
         gen_button = ttk.Button(parent, text="🚀 生成 SELECT 查询语句", command=self._run_ai_query_generation_threaded,
                                 style="Accent.TButton")
         gen_button.grid(row=2, column=0, padx=10, pady=10, ipady=5, sticky="ew")
 
-        # --- Result Output ---
         output_frame = ttk.LabelFrame(parent, text="生成的SQL查询语句")
         output_frame.grid(row=3, column=0, padx=10, pady=5, sticky="nsew")
         output_frame.columnconfigure(0, weight=1);
@@ -410,7 +403,7 @@ public class DishFlavor implements Serializable {
         output_text_frame.rowconfigure(0, weight=1)
 
         self.ai_query_output_text = tk.Text(output_text_frame, wrap="word", relief="solid", borderwidth=1,
-                                            state="disabled")
+                                            state="disabled", foreground="gray")
         self.ai_query_output_text.grid(row=0, column=0, sticky="nsew")
         output_scrollbar = ttk.Scrollbar(output_text_frame, orient="vertical", command=self.ai_query_output_text.yview)
         output_scrollbar.grid(row=0, column=1, sticky="ns");
@@ -426,11 +419,11 @@ public class DishFlavor implements Serializable {
 
         output_frame.columnconfigure(0, weight=1);
         output_frame.rowconfigure(0, weight=1)
+        self._update_ai_panel_visibility()  # Set initial state
 
     def _create_settings_panel(self, parent):
         parent.columnconfigure(0, weight=1)
 
-        # --- MODIFICATION: Added Output Path Management Frame here ---
         output_path_frame = ttk.LabelFrame(parent, text="输出路径管理")
         output_path_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
         output_path_frame.columnconfigure(0, weight=1)
@@ -461,8 +454,6 @@ public class DishFlavor implements Serializable {
         self.spline_combo = ttk.Combobox(style_frame, state="readonly", values=list(self.spline_map.keys()), width=15);
         self.spline_combo.grid(row=1, column=1, padx=10, pady=8, sticky="w");
         self.spline_combo.bind("<<ComboboxSelected>>", self._on_style_changed)
-
-        # --- MODIFICATION: Removed inference button from here ---
 
         colors_map = [("背景色", 'bg_color'), ("默认节点色", 'node_color_default'), ("起始节点色", 'node_color_start'),
                       ("中间节点色", 'node_color_link'), ("末端节点色", 'node_color_end')]
@@ -515,6 +506,15 @@ public class DishFlavor implements Serializable {
         self.clear_log_btn.pack(pady=5, fill="x");
         self.open_file_btn.pack(pady=5, fill="x")
 
+    # --- NEW: Method to show/hide MySQL version selector ---
+    def _update_ai_panel_visibility(self):
+        if self.db_type.get() == "MySQL":
+            self.mysql_version_label.grid()
+            self.mysql_version_combo.grid()
+        else:
+            self.mysql_version_label.grid_remove()
+            self.mysql_version_combo.grid_remove()
+
     def _on_db_type_changed(self, event=None):
         is_sqlite = self.db_type.get() == "SQLite"
         for key in ["主机", "端口", "用户名", "密码"]:
@@ -538,11 +538,13 @@ public class DishFlavor implements Serializable {
         self.table_listbox.config(state="disabled")
         self.generate_menu_btn.config(state="disabled")
 
+        # --- MODIFICATION: Update AI panel when DB type changes ---
+        self._update_ai_panel_visibility()
+
     def _browse_sqlite_file(self):
         path = filedialog.askopenfilename(title="选择SQLite数据库文件",
                                           filetypes=[("SQLite DB", "*.db;*.sqlite;*.sqlite3"), ("All files", "*.*")])
         if not path: return
-        # Directly update the entry and var
         self.sqlite_path_entry.config(state="normal")
         self.sqlite_path_entry.delete(0, tk.END)
         self.sqlite_path_entry.insert(0, path)
@@ -669,7 +671,7 @@ public class DishFlavor implements Serializable {
     def _populate_table_listbox(self, table_names):
         self.full_table_list = sorted(table_names)
         self.table_search_var.set("")
-        self._filter_table_list()  # This will populate the listbox
+        self._filter_table_list()
         if table_names:
             self._log(f"✅ 成功获取 {len(table_names)} 个表。", "SUCCESS")
             self._select_all_tables()
@@ -727,11 +729,11 @@ public class DishFlavor implements Serializable {
                 for c_name in info.get('cols', []):
                     if c_name.endswith('_id') and c_name not in info.get('pks', []):
                         prefix = c_name[:-3]
-                        possible_targets = [prefix, f"{prefix}s", f"{prefix}_info", f"tbl_{prefix}"]  # More conventions
+                        possible_targets = [prefix, f"{prefix}s", f"{prefix}_info", f"tbl_{prefix}"]
                         for target_table in possible_targets:
                             if target_table in selected_tables and target_table in tables_metadata:
                                 target_pks = tables_metadata[target_table].get('pks', [])
-                                if len(target_pks) == 1 and target_pks[0] == 'id':  # Common convention
+                                if len(target_pks) == 1 and target_pks[0] == 'id':
                                     relations.append((t_name, c_name, target_table, target_pks[0]));
                                     self._log(f"  > 推断关系: {t_name}.{c_name} -> {target_table}.{target_pks[0]}",
                                               "INFO")
@@ -767,7 +769,6 @@ public class DishFlavor implements Serializable {
 
     def __update_controls_state(self, state):
         final_state = "normal" if state == "normal" else "disabled"
-        is_sqlite = self.db_type.get() == "SQLite"
 
         if final_state == "disabled":
             self.progress_bar.start(10)
@@ -884,6 +885,9 @@ public class DishFlavor implements Serializable {
             self.graph_style[key].set(color_code[1])
 
     def _copy_ai_query_to_clipboard(self):
+        if self.is_ai_running:
+            messagebox.showwarning("警告", "AI正在运行中，无法复制。", parent=self)
+            return
         sql = self.ai_query_output_text.get(1.0, tk.END).strip()
         if sql:
             self.clipboard_clear()
@@ -892,7 +896,25 @@ public class DishFlavor implements Serializable {
         else:
             messagebox.showwarning("警告", "没有内容可复制。", parent=self)
 
+    def _animate_ai_loading(self, frame_index=0):
+        if not self.is_ai_running:
+            return
+
+        animation_frames = ["|", "/", "-", "\\"]
+        loading_text = f"AI 正在思考中... {animation_frames[frame_index]}"
+
+        self.ai_query_output_text.config(state="normal")
+        self.ai_query_output_text.delete(1.0, tk.END)
+        self.ai_query_output_text.insert(1.0, loading_text)
+        self.ai_query_output_text.config(state="disabled")
+
+        next_frame_index = (frame_index + 1) % len(animation_frames)
+        self.after(100, self._animate_ai_loading, next_frame_index)
+
     def _run_ai_query_generation_threaded(self):
+        if self.is_ai_running:
+            messagebox.showinfo("提示", "AI正在运行，请稍候...", parent=self)
+            return
         if not self._get_selected_db():
             messagebox.showerror("错误", "请先在左侧连接并选择一个数据库。", parent=self)
             return
@@ -905,8 +927,13 @@ public class DishFlavor implements Serializable {
         if not target_structure:
             messagebox.showerror("错误", "目标数据结构不能为空！", parent=self)
             return
+
         self.progress_bar.start(10)
         self._log(f"正在为数据库 '{self._get_selected_db()}' 生成查询...", "INFO")
+
+        self.is_ai_running = True
+        self._animate_ai_loading()
+
         thread = threading.Thread(target=self._execute_ai_query_generation, args=(api_key, target_structure),
                                   daemon=True)
         thread.start()
@@ -932,12 +959,10 @@ public class DishFlavor implements Serializable {
                 for col in columns:
                     schema_text += f"- `{col['name']}` ({col['type']})\n"
 
-                # Add Primary Key info
                 pk_constraint = inspector.get_pk_constraint(table_name)
                 if pk_constraint and pk_constraint['constrained_columns']:
                     schema_text += f"  主键: ({', '.join(pk_constraint['constrained_columns'])})\n"
 
-                # Add Foreign Key info
                 fks = inspector.get_foreign_keys(table_name)
                 if fks:
                     schema_text += "  外键:\n"
@@ -955,29 +980,43 @@ public class DishFlavor implements Serializable {
         schema_text = self._get_database_schema_as_text()
         if not schema_text:
             self.after(0, self.progress_bar.stop)
+            self.is_ai_running = False
+            self.after(0, self._update_ai_query_output, "# 获取数据库结构失败，请检查连接和日志。")
             return
 
         try:
             client = ZhipuAI(api_key=api_key)
-            system_prompt = f"""
-            你是一位顶级的SQL专家，精通MySQL, PostgreSQL等数据库。你的任务是根据用户提供的数据库表结构（Schema）和期望的数据结构（Target Structure），编写一条高效的SQL `SELECT` 查询语句。
-            **核心指令:**
-            1.  **理解关系**: 仔细分析数据库结构，特别是明确提供的主外键信息，智能地推断表之间的关联关系。
-            2.  **字段映射**: 使用 `AS` 关键字将查询结果的字段重命名，使其与期望数据结构中的字段名完全匹配（注意大小写和下划线到驼峰的转换，如 `user_name` AS `userName`）。
-            3.  **处理一对多关系 (最重要)**:
-                - 当期望结构中包含列表或数组时（如 `List<Flavor>`），你必须使用JSON聚合函数来处理这种一对多关系。
-                - 对于MySQL 8+或PostgreSQL，优先使用 `JSON_ARRAYAGG(JSON_OBJECT(...))` 将关联的子表记录聚合成一个JSON数组。
-                - 这通常需要在一个子查询或者 `LEFT JOIN` 后的 `GROUP BY` 语句中完成。
-            4.  **最终输出**: 你的最终输出**必须且只能是**一条格式化好的SQL查询语句，不要包含任何解释、注释或Markdown标记 (例如 ```sql)。
-            **一对多关系处理示例:**
-            - **数据库有**: `dish` 表和 `dish_flavor` 表 (`dish_flavor.dish_id` 关联 `dish.id`)
-            - **期望结构有**: `List<DishFlavor> flavors`
-            - **你应该生成的SQL片段可能像这样**:
-              ```sql
-              (SELECT JSON_ARRAYAGG(JSON_OBJECT('id', df.id, 'name', df.name, 'value', df.value)) FROM dish_flavor df WHERE df.dish_id = d.id) AS flavors
-              ```
-            现在，开始分析并生成查询。
-            """
+
+            # --- MODIFICATION: Dynamically choose prompt based on user selection ---
+            if self.db_type.get() == "MySQL" and self.mysql_version_var.get() == "MySQL 5.7":
+                # Use MySQL 5.7 specific prompt
+                system_prompt = f"""
+                你是一位顶级的SQL专家，专门为 **MySQL 5.7** 数据库编写查询。你的任务是根据用户提供的数据库表结构（Schema）和期望的数据结构（Target Structure），编写一条高效且兼容的SQL `SELECT` 查询语句。
+                **核心指令:**
+                1.  **兼容性第一**: 你的首要任务是确保生成的SQL能在 **MySQL 5.7** 上运行。
+                2.  **处理一对多关系 (最重要 - MySQL 5.7 方式)**: MySQL 5.7 **不支持** `JSON_ARRAYAGG` 函数。当期望结构中包含列表或数组时（如 `List<Flavor>`），你 **必须使用** `GROUP_CONCAT` 函数结合 `CONCAT` 来手动构建一个JSON数组格式的字符串。
+                3.  **最终输出**: 你的最终输出**必须且只能是**一条格式化好的SQL查询语句，不要包含任何解释或Markdown标记。
+                **一对多关系处理示例 (MySQL 5.7):**
+                - **你应该生成的SQL片段必须像这样**:
+                  ```sql
+                  (SELECT CONCAT('[', GROUP_CONCAT(CONCAT('{{"id":', df.id, ',"name":"', df.name, '"}}')), ']') FROM dish_flavor df WHERE df.dish_id = d.id) AS flavors
+                  ```
+                现在，开始为 MySQL 5.7 分析并生成查询。
+                """
+            else:
+                # Use the default prompt for modern databases (MySQL 8+, PostgreSQL, etc.)
+                system_prompt = f"""
+                你是一位顶级的SQL专家，精通MySQL, PostgreSQL等数据库。你的任务是根据用户提供的数据库表结构（Schema）和期望的数据结构（Target Structure），编写一条高效的SQL `SELECT` 查询语句。
+                **核心指令:**
+                1.  **处理一对多关系 (最重要)**: 当期望结构中包含列表或数组时（如 `List<Flavor>`），你必须使用JSON聚合函数来处理这种一对多关系。对于MySQL 8+或PostgreSQL，优先使用 `JSON_ARRAYAGG(JSON_OBJECT(...))`。
+                2.  **最终输出**: 你的最终输出**必须且只能是**一条格式化好的SQL查询语句，不要包含任何解释或Markdown标记。
+                **一对多关系处理示例 (MySQL 8+):**
+                - **你应该生成的SQL片段可能像这样**:
+                  ```sql
+                  (SELECT JSON_ARRAYAGG(JSON_OBJECT('id', df.id, 'name', df.name, 'value', df.value)) FROM dish_flavor df WHERE df.dish_id = d.id) AS flavors
+                  ```
+                现在，开始分析并生成查询。
+                """
 
             user_prompt = f"""
             --- 数据库结构 ---
@@ -987,7 +1026,10 @@ public class DishFlavor implements Serializable {
             """
 
             model_to_use = self.ai_model_var.get()
-            self._log(f"正在调用模型 '{model_to_use}'...", "INFO")
+            log_msg = f"正在调用模型 '{model_to_use}'"
+            if self.db_type.get() == "MySQL":
+                log_msg += f" (模式: {self.mysql_version_var.get()})"
+            self._log(log_msg, "INFO")
 
             response = client.chat.completions.create(
                 model=model_to_use,
@@ -1005,14 +1047,18 @@ public class DishFlavor implements Serializable {
         except Exception as e:
             error_details = f"{type(e).__name__}: {e}"
             self._log(f"❌ ZhipuAI 查询生成失败: {error_details}", "ERROR")
+            self.after(0, self._update_ai_query_output, f"# AI 调用失败\n# 错误: {error_details}")
             self.after(0, messagebox.showerror, "AI生成失败", f"调用大模型时发生错误:\n\n{error_details}")
         finally:
+            self.is_ai_running = False
             self.after(0, self.progress_bar.stop)
 
     def _update_ai_query_output(self, sql):
-        self.ai_query_output_text.config(state="normal")
+        self.ai_query_output_text.config(state="normal", foreground="black")
         self.ai_query_output_text.delete(1.0, tk.END)
         self.ai_query_output_text.insert(1.0, sql)
+        if sql.startswith("#"):
+            self.ai_query_output_text.config(foreground="red")
         self.ai_query_output_text.config(state="disabled")
 
 
