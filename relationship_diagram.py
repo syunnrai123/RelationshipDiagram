@@ -78,6 +78,9 @@ class UltimateBeautifiedApp(tk.Tk):
         self.layout_map_rev = {v: k for k, v in self.layout_map.items()}
         self.spline_map_rev = {v: k for k, v in self.spline_map.items()}
 
+        # --- 修改：AI模型数据模型 ---
+        self.ai_model_var = tk.StringVar(value="glm-4.5-flash")  # 默认使用免费模型
+
         sv_ttk.set_theme("light")
         self._create_widgets()
 
@@ -163,12 +166,10 @@ class UltimateBeautifiedApp(tk.Tk):
     def _create_widgets(self):
         main_pane = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
         main_pane.pack(fill="both", expand=True, padx=10, pady=10)
-
         left_panel = ttk.Frame(main_pane, width=600)
         right_panel = ttk.Frame(main_pane, width=600)
         main_pane.add(left_panel, weight=1)
         main_pane.add(right_panel, weight=1)
-
         self._create_workflow_panel(left_panel)
         self._create_info_panel(right_panel)
 
@@ -687,13 +688,26 @@ class UltimateBeautifiedApp(tk.Tk):
         if color_code and color_code[1]:
             self.graph_style[key].set(color_code[1])
 
-    # --- 4. AI Query Generator 功能 (全新重构) ---
+    # --- 4. AI Query Generator 功能 (已升级) ---
     def _create_ai_query_panel(self, parent):
         parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(1, weight=2)
-        parent.rowconfigure(3, weight=3)
-        input_frame = ttk.LabelFrame(parent, text=" ❶ 粘贴目标数据结构 (JSON 或 Java DTO/VO) ")
-        input_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
+        parent.rowconfigure(2, weight=2)
+        parent.rowconfigure(4, weight=3)
+
+        # --- 修改：新增模型选项 ---
+        options_frame = ttk.LabelFrame(parent, text=" ❶ 模型选项 ")
+        options_frame.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="ew")
+        options_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(options_frame, text="选择或输入模型:").grid(row=0, column=0, padx=(10, 5), pady=8, sticky="w")
+        model_combo = ttk.Combobox(options_frame, textvariable=self.ai_model_var,
+                                   values=[ "glm-4.5-flash", "glm-4.5"])
+        model_combo.grid(row=0, column=1, padx=0, pady=8, sticky="ew")
+        ToolTip(model_combo, "选择预设模型或手动输入新模型名称")
+
+        # --- 目标结构输入 ---
+        input_frame = ttk.LabelFrame(parent, text=" ❷ 粘贴目标数据结构 (JSON 或 Java DTO/VO) ")
+        input_frame.grid(row=2, column=0, padx=10, pady=5, sticky="nsew")
         input_frame.columnconfigure(0, weight=1);
         input_frame.rowconfigure(0, weight=1)
         self.ai_query_input_text = tk.Text(input_frame, wrap="word", relief="solid", borderwidth=1, undo=True)
@@ -717,14 +731,15 @@ public class DishFlavor implements Serializable {
     private String value;
 }
 ''')
-        action_frame = ttk.Frame(parent)
-        action_frame.grid(row=2, column=0, padx=10, pady=5, sticky="ew")
-        action_frame.columnconfigure(0, weight=1)
-        gen_button = ttk.Button(action_frame, text="🚀 生成 SELECT 查询语句",
-                                command=self._run_ai_query_generation_threaded, style="Accent.TButton")
-        gen_button.pack(side="left", fill="x", expand=True, ipady=5)
-        output_frame = ttk.LabelFrame(parent, text=" ❷ 生成的SQL查询语句 ")
-        output_frame.grid(row=3, column=0, padx=10, pady=5, sticky="nsew")
+
+        # --- 操作按钮 ---
+        gen_button = ttk.Button(parent, text="🚀 生成 SELECT 查询语句", command=self._run_ai_query_generation_threaded,
+                                style="Accent.TButton")
+        gen_button.grid(row=3, column=0, padx=10, pady=5, ipady=5, sticky="ew")
+
+        # --- 结果输出 ---
+        output_frame = ttk.LabelFrame(parent, text=" ❸ 生成的SQL查询语句 ")
+        output_frame.grid(row=4, column=0, padx=10, pady=5, sticky="nsew")
         output_frame.columnconfigure(0, weight=1);
         output_frame.rowconfigure(0, weight=1)
         self.ai_query_output_text = tk.Text(output_frame, wrap="word", relief="solid", borderwidth=1, state="disabled")
@@ -791,7 +806,6 @@ public class DishFlavor implements Serializable {
             client = ZhipuAI(api_key=api_key)
             system_prompt = f"""
             你是一位顶级的SQL专家，精通MySQL, PostgreSQL等数据库。你的任务是根据用户提供的数据库表结构（Schema）和期望的数据结构（Target Structure），编写一条高效的SQL `SELECT` 查询语句。
-
             **核心指令:**
             1.  **理解关系**: 仔细分析数据库结构，智能地推断表之间的主外键关联关系（例如，`users.id` 和 `posts.user_id`），即使没有明确的注释。
             2.  **字段映射**: 使用 `AS` 关键字将查询结果的字段重命名，使其与期望数据结构中的字段名完全匹配（注意大小写和下划线到驼峰的转换，如 `user_name` AS `userName`）。
@@ -800,7 +814,6 @@ public class DishFlavor implements Serializable {
                 - 对于MySQL 8+或PostgreSQL，优先使用 `JSON_ARRAYAGG(JSON_OBJECT(...))` 将关联的子表记录聚合成一个JSON数组。
                 - 这通常需要在一个子查询或者 `LEFT JOIN` 后的 `GROUP BY` 语句中完成。
             4.  **最终输出**: 你的最终输出**必须且只能是**一条格式化好的SQL查询语句，不要包含任何解释、注释或Markdown标记 (例如 ```sql)。
-
             **一对多关系处理示例:**
             - **数据库有**: `dish` 表和 `dish_flavor` 表 (`dish_flavor.dish_id` 关联 `dish.id`)
             - **期望结构有**: `List<DishFlavor> flavors`
@@ -808,35 +821,31 @@ public class DishFlavor implements Serializable {
               ```sql
               (SELECT JSON_ARRAYAGG(JSON_OBJECT('id', df.id, 'name', df.name, 'value', df.value)) FROM dish_flavor df WHERE df.dish_id = d.id) AS flavors
               ```
-
             现在，开始分析并生成查询。
             """
 
             user_prompt = f"""
             --- 数据库结构 ---
             {schema_text}
-
             --- 期望的数据结构 ---
             {target_structure}
             """
 
+            model_to_use = self.ai_model_var.get()
+
             response = client.chat.completions.create(
-                model="glm-4.5",
+                model=model_to_use,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                thinking={
-                    "type": "disabled",  # 启用深度思考模式
-                },
             )
 
             # --- 致命错误修正 ---
-            # API返回的choices是一个列表，必须通过索引访问第一个结果
+            # API返回的choices是一个列表，必须通过索引 `[0]` 访问第一个结果
             result_sql = response.choices[0].message.content
 
             cleaned_sql = re.sub(r'```sql\n?|```', '', result_sql).strip()
-
             self.after(0, self._update_ai_query_output, cleaned_sql)
             self._log("✅ ZhipuAI 查询生成成功！", "SUCCESS")
 
