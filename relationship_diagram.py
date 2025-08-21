@@ -8,6 +8,13 @@ import threading
 import webbrowser
 import json
 import sys
+import re
+
+try:
+    from zhipuai import ZhipuAI
+except ImportError:
+    messagebox.showerror("缺少库", "未找到 'zhipuai' 库。\n请通过 'pip install zhipuai' 安装。")
+    sys.exit()
 
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -43,7 +50,7 @@ class UltimateBeautifiedApp(tk.Tk):
 
     def __init__(self):
         super().__init__()
-        self.title("数据库关系图生成器 Pro (最终稳定版)")
+        self.title("数据库工具箱 Pro (关系图 & AI查询生成)")
         self.geometry("1200x800")
 
         # --- 数据模型 ---
@@ -52,6 +59,8 @@ class UltimateBeautifiedApp(tk.Tk):
         self.last_generated_file = None
         self.config_file_path = tk.StringVar()
         self.db_type = tk.StringVar(value="MySQL")
+
+        self.zhipu_api_key = tk.StringVar()
 
         self.db_search_var = tk.StringVar()
         self.table_search_var = tk.StringVar()
@@ -92,6 +101,7 @@ class UltimateBeautifiedApp(tk.Tk):
                 config = json.load(f)
             self.config_file_path.set(target_path)
             self.db_type.set(config.get("db_type", "MySQL"))
+            self.zhipu_api_key.set(config.get("zhipu_api_key", ""))
             db_conf = config.get("database", {})
             for key, entry in self.db_entries.items():
                 if key != "密码" and key in db_conf: entry.delete(0, tk.END); entry.insert(0, db_conf.get(key, ''))
@@ -116,7 +126,8 @@ class UltimateBeautifiedApp(tk.Tk):
         if not target_path: self._log("配置文件路径为空，无法保存。", "ERROR"); return
         self._log(f"正在保存配置到 {os.path.basename(target_path)}...", "INFO")
         db_conf = {key: entry.get() for key, entry in self.db_entries.items() if key != "密码"}
-        config = {"db_type": self.db_type.get(), "database": db_conf, "output_path": self.output_path.get(),
+        config = {"zhipu_api_key": self.zhipu_api_key.get(), "db_type": self.db_type.get(), "database": db_conf,
+                  "output_path": self.output_path.get(),
                   "graph_style": {key: var.get() for key, var in self.graph_style.items()}}
         try:
             with open(target_path, 'w', encoding='utf-8') as f:
@@ -125,8 +136,7 @@ class UltimateBeautifiedApp(tk.Tk):
             self._log("✅ 配置已保存。", "SUCCESS")
         except Exception as e:
             self._log(f"保存配置失败: {e}", "ERROR");
-            self.after(0, lambda: messagebox.showerror("保存失败",
-                                                       f"无法保存配置文件到：\n{target_path}\n\n错误: {e}"))
+            self.after(0, lambda: messagebox.showerror("保存失败", f"无法保存配置文件到：\n{target_path}\n\n错误: {e}"))
 
     def _select_and_load_config(self):
         path = filedialog.askopenfilename(title="选择配置文件",
@@ -149,7 +159,7 @@ class UltimateBeautifiedApp(tk.Tk):
         return {'layout': 'TB', 'spline': 'ortho', 'bg_color': '#FAFAFA', 'node_color_default': '#87CEEB',
                 'node_color_start': '#FFDDC1', 'node_color_link': '#D1FFBD', 'node_color_end': '#E0BBE4'}
 
-    # --- 2. UI创建 (回归双栏布局) ---
+    # --- 2. UI创建 (不变) ---
     def _create_widgets(self):
         main_pane = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
         main_pane.pack(fill="both", expand=True, padx=10, pady=10)
@@ -162,162 +172,31 @@ class UltimateBeautifiedApp(tk.Tk):
         self._create_workflow_panel(left_panel)
         self._create_info_panel(right_panel)
 
-    def _create_workflow_panel(self, parent):
-        parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(1, weight=1)
-
-        step1_frame = ttk.LabelFrame(parent, text=" ❶ 连接到数据库服务器 ")
-        step1_frame.grid(row=0, column=0, padx=10, pady=(5, 10), sticky="ew")
-        step1_frame.columnconfigure(1, weight=1)
-
-        ttk.Label(step1_frame, text="数据库类型:").grid(row=0, column=0, padx=10, pady=8, sticky="w")
-        self.db_type_combo = ttk.Combobox(step1_frame, textvariable=self.db_type, state="readonly",
-                                          values=list(self.db_dialect_map.keys()))
-        self.db_type_combo.grid(row=0, column=1, columnspan=2, padx=10, pady=8, sticky="w")
-        self.db_type_combo.bind("<<ComboboxSelected>>", self._on_db_type_changed)
-
-        labels = ["主机:", "端口:", "用户名:", "密码:"]
-        self.db_entries['数据库'] = ttk.Entry(parent)
-        for i, label_text in enumerate(labels, 1):
-            key = label_text.strip(':');
-            ttk.Label(step1_frame, text=label_text).grid(row=i, column=0, padx=10, pady=8, sticky="w")
-            entry = ttk.Entry(step1_frame, show="*" if "密码" in label_text else "")
-            entry.grid(row=i, column=1, columnspan=2, padx=10, pady=8, sticky="ew")
-            self.db_entries[key] = entry;
-            setattr(self, f"entry_{key}", entry)
-
-        self.connect_btn = ttk.Button(step1_frame, text="🔗 连接并加载数据库", command=self._fetch_database_list,
-                                      style="Accent.TButton")
-        self.connect_btn.grid(row=len(labels) + 1, column=0, columnspan=3, padx=10, pady=10, sticky="ew")
-
-        step2_frame = ttk.LabelFrame(parent, text=" ❷ 选择数据库和表 ")
-        step2_frame.grid(row=1, column=0, padx=10, pady=5, sticky="nsew")
-        step2_frame.columnconfigure(0, weight=1)
-        step2_frame.rowconfigure(1, weight=1)
-        step2_frame.rowconfigure(3, weight=2)
-
-        db_area_frame = ttk.LabelFrame(step2_frame, text="数据库列表")
-        db_area_frame.grid(row=0, column=0, rowspan=2, padx=10, pady=5, sticky="nsew")
-        db_area_frame.columnconfigure(0, weight=1)
-        db_area_frame.rowconfigure(1, weight=1)
-
-        db_search_frame = ttk.Frame(db_area_frame)
-        db_search_frame.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
-        db_search_frame.columnconfigure(1, weight=1)
-        ttk.Label(db_search_frame, text="🔍 搜索:").grid(row=0, column=0, sticky="w")
-        self.db_search_entry = ttk.Entry(db_search_frame, textvariable=self.db_search_var, state="disabled")
-        self.db_search_entry.grid(row=0, column=1, padx=5, sticky="ew")
-        self.db_search_var.trace_add("write", self._filter_db_list)
-
-        self.db_listbox = tk.Listbox(db_area_frame, selectmode="single", relief="solid", borderwidth=1,
-                                     state="disabled", exportselection=False, height=6)
-        self.db_listbox.grid(row=1, column=0, padx=5, pady=(0, 5), sticky="nsew")
-        db_scrollbar = ttk.Scrollbar(db_area_frame, orient="vertical", command=self.db_listbox.yview)
-        db_scrollbar.grid(row=1, column=1, padx=(0, 5), pady=(0, 5), sticky="ns")
-        self.db_listbox.config(yscrollcommand=db_scrollbar.set)
-        self.db_listbox.bind("<<ListboxSelect>>", self._on_database_selected)
-
-        self.fetch_tables_btn = ttk.Button(db_area_frame, text="⬇️ (刷新)获取选中库的表",
-                                           command=self._on_fetch_tables_button_click, state="disabled")
-        self.fetch_tables_btn.grid(row=2, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
-
-        table_area_frame = ttk.LabelFrame(step2_frame, text="表列表")
-        table_area_frame.grid(row=2, column=0, rowspan=2, padx=10, pady=5, sticky="nsew")
-        table_area_frame.columnconfigure(0, weight=1)
-        table_area_frame.rowconfigure(1, weight=1)
-
-        table_search_frame = ttk.Frame(table_area_frame)
-        table_search_frame.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
-        table_search_frame.columnconfigure(1, weight=1)
-        ttk.Label(table_search_frame, text="🔍 搜索:").grid(row=0, column=0, sticky="w")
-        self.table_search_entry = ttk.Entry(table_search_frame, textvariable=self.table_search_var, state="disabled")
-        self.table_search_entry.grid(row=0, column=1, padx=5, sticky="ew")
-        self.table_search_var.trace_add("write", self._filter_table_list)
-
-        self.table_listbox = tk.Listbox(table_area_frame, selectmode="extended", relief="solid", borderwidth=1,
-                                        state="disabled", exportselection=False)
-        self.table_listbox.grid(row=1, column=0, padx=5, pady=(0, 5), sticky="nsew")
-        table_scrollbar = ttk.Scrollbar(table_area_frame, orient="vertical", command=self.table_listbox.yview)
-        table_scrollbar.grid(row=1, column=1, padx=(0, 5), pady=(0, 5), sticky="ns")
-        self.table_listbox.config(yscrollcommand=table_scrollbar.set)
-
-        side_btn_frame = ttk.Frame(table_area_frame)
-        side_btn_frame.grid(row=1, column=2, padx=(0, 5), pady=(0, 5), sticky="ns")
-        ttk.Button(side_btn_frame, text="全选", command=self._select_all_tables).pack(side="top", pady=2, fill="x")
-        ttk.Button(side_btn_frame, text="全不选", command=self._deselect_all_tables).pack(side="top", pady=2, fill="x")
-
     def _create_info_panel(self, parent):
         parent.rowconfigure(0, weight=1);
         parent.columnconfigure(0, weight=1)
         notebook = ttk.Notebook(parent)
         notebook.grid(row=0, column=0, sticky="nsew", padx=10, pady=5)
-
         log_tab = ttk.Frame(notebook)
         settings_tab = ttk.Frame(notebook)
+        ai_query_tab = ttk.Frame(notebook)
+        notebook.add(ai_query_tab, text=' 🤖 AI Query Generator ')
         notebook.add(settings_tab, text=' ⚙️ 样式与配置 ')
         notebook.add(log_tab, text=' 📈 生成与日志 ')
-
         self._create_log_panel(log_tab)
         self._create_settings_panel(settings_tab)
-
-    def _create_log_panel(self, parent):
-        parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(1, weight=1)
-
-        step3_frame = ttk.LabelFrame(parent, text=" ❸ 生成与输出 ")
-        step3_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
-        step3_frame.columnconfigure(0, weight=1)
-
-        ttk.Label(step3_frame, text="输出路径:").grid(row=0, column=0, columnspan=2, padx=10, pady=(8, 0), sticky="w")
-        path_entry = ttk.Entry(step3_frame, textvariable=self.output_path, state="readonly")
-        path_entry.grid(row=1, column=0, padx=10, pady=(2, 8), sticky="ew")
-        browse_btn = ttk.Button(step3_frame, text="...", command=self._browse_directory, width=4)
-        browse_btn.grid(row=1, column=1, padx=(0, 10), pady=(2, 8))
-
-        action_frame = ttk.Frame(step3_frame);
-        action_frame.grid(row=2, column=0, columnspan=2, pady=10, sticky="ew")
-        action_frame.columnconfigure((0, 1), weight=1)
-        self.fk_btn = ttk.Button(action_frame, text="从外键生成",
-                                 command=lambda: self._run_generation(self._execute_generate_by_fk), state="disabled")
-        self.infer_btn = ttk.Button(action_frame, text="从约定推断",
-                                    command=lambda: self._run_generation(self._execute_generate_by_inference),
-                                    state="disabled")
-        self.fk_btn.grid(row=0, column=0, padx=5, ipady=5, sticky="ew")
-        self.infer_btn.grid(row=0, column=1, padx=5, ipady=5, sticky="ew")
-
-        log_frame_inner = ttk.LabelFrame(parent, text="日志")
-        log_frame_inner.grid(row=1, column=0, padx=10, pady=5, sticky="nsew")
-        log_frame_inner.columnconfigure(0, weight=1)
-        log_frame_inner.rowconfigure(1, weight=1)
-
-        self.progress_bar = ttk.Progressbar(log_frame_inner, mode='indeterminate')
-        self.progress_bar.grid(row=0, column=0, columnspan=2, padx=10, pady=10, sticky="ew")
-
-        log_text_frame = ttk.Frame(log_frame_inner);
-        log_text_frame.grid(row=1, column=0, padx=10, pady=(0, 10), sticky="nsew")
-        log_text_frame.columnconfigure(0, weight=1);
-        log_text_frame.rowconfigure(0, weight=1)
-        self.log_text = tk.Text(log_text_frame, height=5, state="disabled", wrap="word", relief="solid", borderwidth=1)
-        self.log_text.grid(row=0, column=0, sticky="nsew")
-        log_scrollbar = ttk.Scrollbar(log_text_frame, orient="vertical", command=self.log_text.yview)
-        log_scrollbar.grid(row=0, column=1, sticky="ns");
-        self.log_text.config(yscrollcommand=log_scrollbar.set)
-
-        self.log_text.tag_config("SUCCESS", foreground="green");
-        self.log_text.tag_config("ERROR", foreground="red");
-        self.log_text.tag_config("INFO", foreground="blue")
-
-        log_btn_frame = ttk.Frame(log_frame_inner);
-        log_btn_frame.grid(row=1, column=1, padx=(0, 10), pady=(0, 10), sticky="ns")
-        self.clear_log_btn = ttk.Button(log_btn_frame, text="清空", command=self._clear_log)
-        self.open_file_btn = ttk.Button(log_btn_frame, text="打开", state="disabled", command=self._open_last_file)
-        self.clear_log_btn.pack(pady=5, fill="x");
-        self.open_file_btn.pack(pady=5, fill="x")
+        self._create_ai_query_panel(ai_query_tab)
 
     def _create_settings_panel(self, parent):
         parent.columnconfigure(0, weight=1)
+        api_key_frame = ttk.LabelFrame(parent, text="ZhipuAI API Key 配置")
+        api_key_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        api_key_frame.columnconfigure(0, weight=1)
+        api_key_entry = ttk.Entry(api_key_frame, textvariable=self.zhipu_api_key, show="*")
+        api_key_entry.grid(row=0, column=0, padx=10, pady=8, sticky="ew")
+        ToolTip(api_key_entry, "在此输入您的ZhipuAI API Key。配置将自动保存。")
         config_frame = ttk.LabelFrame(parent, text="配置文件管理")
-        config_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        config_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
         config_frame.columnconfigure(0, weight=1)
         config_path_entry = ttk.Entry(config_frame, textvariable=self.config_file_path, state="readonly")
         config_path_entry.grid(row=0, column=0, padx=10, pady=8, sticky="ew")
@@ -325,11 +204,9 @@ class UltimateBeautifiedApp(tk.Tk):
         config_btn_frame.grid(row=0, column=1, padx=5, pady=5)
         ttk.Button(config_btn_frame, text="加载", command=self._select_and_load_config).pack(side="left", padx=5)
         ttk.Button(config_btn_frame, text="另存为", command=self._save_config_as).pack(side="left", padx=5)
-
         style_frame = ttk.LabelFrame(parent, text="图表样式配置")
-        style_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
+        style_frame.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
         style_frame.columnconfigure(1, weight=1)
-
         ttk.Label(style_frame, text="布局方向:").grid(row=0, column=0, padx=10, pady=8, sticky="w")
         self.layout_combo = ttk.Combobox(style_frame, state="readonly", values=list(self.layout_map.keys()), width=15);
         self.layout_combo.grid(row=0, column=1, padx=10, pady=8, sticky="w");
@@ -338,7 +215,6 @@ class UltimateBeautifiedApp(tk.Tk):
         self.spline_combo = ttk.Combobox(style_frame, state="readonly", values=list(self.spline_map.keys()), width=15);
         self.spline_combo.grid(row=1, column=1, padx=10, pady=8, sticky="w");
         self.spline_combo.bind("<<ComboboxSelected>>", self._on_style_changed)
-
         colors_map = [("背景色", 'bg_color'), ("默认节点色", 'node_color_default'), ("起始节点色", 'node_color_start'),
                       ("中间节点色", 'node_color_link'), ("末端节点色", 'node_color_end')]
         for i, (text, key) in enumerate(colors_map, 2):
@@ -349,34 +225,146 @@ class UltimateBeautifiedApp(tk.Tk):
             color_btn.grid(row=i, column=2, padx=10, pady=5)
             self.graph_style[key].trace_add("write", lambda name, index, mode, var=self.graph_style[key],
                                                             preview=color_preview: preview.config(bg=var.get()))
-
         theme_frame = ttk.LabelFrame(parent, text="应用主题")
-        theme_frame.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
+        theme_frame.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
         theme_switch = ttk.Checkbutton(theme_frame, text="切换为暗黑模式", style="Switch.TCheckbutton",
                                        command=lambda: sv_ttk.set_theme(
                                            "dark" if theme_switch.instate(['selected']) else "light"))
         theme_switch.pack(padx=10, pady=10, anchor="w")
 
-    # --- 3. 核心逻辑 (Bug修复与健壮性增强) ---
+    def _create_workflow_panel(self, parent):
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(1, weight=1)
+        step1_frame = ttk.LabelFrame(parent, text=" ❶ 连接到数据库服务器 ")
+        step1_frame.grid(row=0, column=0, padx=10, pady=(5, 10), sticky="ew")
+        step1_frame.columnconfigure(1, weight=1)
+        ttk.Label(step1_frame, text="数据库类型:").grid(row=0, column=0, padx=10, pady=8, sticky="w")
+        self.db_type_combo = ttk.Combobox(step1_frame, textvariable=self.db_type, state="readonly",
+                                          values=list(self.db_dialect_map.keys()))
+        self.db_type_combo.grid(row=0, column=1, columnspan=2, padx=10, pady=8, sticky="w")
+        self.db_type_combo.bind("<<ComboboxSelected>>", self._on_db_type_changed)
+        labels = ["主机:", "端口:", "用户名:", "密码:"]
+        self.db_entries['数据库'] = ttk.Entry(parent)
+        for i, label_text in enumerate(labels, 1):
+            key = label_text.strip(':');
+            ttk.Label(step1_frame, text=label_text).grid(row=i, column=0, padx=10, pady=8, sticky="w")
+            entry = ttk.Entry(step1_frame, show="*" if "密码" in label_text else "")
+            entry.grid(row=i, column=1, columnspan=2, padx=10, pady=8, sticky="ew")
+            self.db_entries[key] = entry;
+            setattr(self, f"entry_{key}", entry)
+        self.connect_btn = ttk.Button(step1_frame, text="🔗 连接并加载数据库", command=self._fetch_database_list,
+                                      style="Accent.TButton")
+        self.connect_btn.grid(row=len(labels) + 1, column=0, columnspan=3, padx=10, pady=10, sticky="ew")
+        step2_frame = ttk.LabelFrame(parent, text=" ❷ 选择数据库和表 (用于关系图 & AI上下文) ")
+        step2_frame.grid(row=1, column=0, padx=10, pady=5, sticky="nsew")
+        step2_frame.columnconfigure(0, weight=1)
+        step2_frame.rowconfigure(1, weight=1)
+        step2_frame.rowconfigure(3, weight=2)
+        db_area_frame = ttk.LabelFrame(step2_frame, text="数据库列表")
+        db_area_frame.grid(row=0, column=0, rowspan=2, padx=10, pady=5, sticky="nsew")
+        db_area_frame.columnconfigure(0, weight=1)
+        db_area_frame.rowconfigure(1, weight=1)
+        db_search_frame = ttk.Frame(db_area_frame)
+        db_search_frame.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
+        db_search_frame.columnconfigure(1, weight=1)
+        ttk.Label(db_search_frame, text="🔍 搜索:").grid(row=0, column=0, sticky="w")
+        self.db_search_entry = ttk.Entry(db_search_frame, textvariable=self.db_search_var, state="disabled")
+        self.db_search_entry.grid(row=0, column=1, padx=5, sticky="ew")
+        self.db_search_var.trace_add("write", self._filter_db_list)
+        self.db_listbox = tk.Listbox(db_area_frame, selectmode="single", relief="solid", borderwidth=1,
+                                     state="disabled", exportselection=False, height=6)
+        self.db_listbox.grid(row=1, column=0, padx=5, pady=(0, 5), sticky="nsew")
+        db_scrollbar = ttk.Scrollbar(db_area_frame, orient="vertical", command=self.db_listbox.yview)
+        db_scrollbar.grid(row=1, column=1, padx=(0, 5), pady=(0, 5), sticky="ns")
+        self.db_listbox.config(yscrollcommand=db_scrollbar.set)
+        self.db_listbox.bind("<<ListboxSelect>>", self._on_database_selected)
+        self.fetch_tables_btn = ttk.Button(db_area_frame, text="⬇️ (刷新)获取选中库的表",
+                                           command=self._on_fetch_tables_button_click, state="disabled")
+        self.fetch_tables_btn.grid(row=2, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
+        table_area_frame = ttk.LabelFrame(step2_frame, text="表列表")
+        table_area_frame.grid(row=2, column=0, rowspan=2, padx=10, pady=5, sticky="nsew")
+        table_area_frame.columnconfigure(0, weight=1)
+        table_area_frame.rowconfigure(1, weight=1)
+        table_search_frame = ttk.Frame(table_area_frame)
+        table_search_frame.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
+        table_search_frame.columnconfigure(1, weight=1)
+        ttk.Label(table_search_frame, text="🔍 搜索:").grid(row=0, column=0, sticky="w")
+        self.table_search_entry = ttk.Entry(table_area_frame, textvariable=self.table_search_var, state="disabled")
+        self.table_search_entry.grid(row=0, column=1, padx=5, sticky="ew")
+        self.table_search_var.trace_add("write", self._filter_table_list)
+        self.table_listbox = tk.Listbox(table_area_frame, selectmode="extended", relief="solid", borderwidth=1,
+                                        state="disabled", exportselection=False)
+        self.table_listbox.grid(row=1, column=0, padx=5, pady=(0, 5), sticky="nsew")
+        table_scrollbar = ttk.Scrollbar(table_area_frame, orient="vertical", command=self.table_listbox.yview)
+        table_scrollbar.grid(row=1, column=1, padx=(0, 5), pady=(0, 5), sticky="ns")
+        self.table_listbox.config(yscrollcommand=table_scrollbar.set)
+        side_btn_frame = ttk.Frame(table_area_frame)
+        side_btn_frame.grid(row=1, column=2, padx=(0, 5), pady=(0, 5), sticky="ns")
+        ttk.Button(side_btn_frame, text="全选", command=self._select_all_tables).pack(side="top", pady=2, fill="x")
+        ttk.Button(side_btn_frame, text="全不选", command=self._deselect_all_tables).pack(side="top", pady=2, fill="x")
+
+    def _create_log_panel(self, parent):
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(1, weight=1)
+        step3_frame = ttk.LabelFrame(parent, text=" ❸ 生成与输出 (关系图) ")
+        step3_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        step3_frame.columnconfigure(0, weight=1)
+        ttk.Label(step3_frame, text="输出路径:").grid(row=0, column=0, columnspan=2, padx=10, pady=(8, 0), sticky="w")
+        path_entry = ttk.Entry(step3_frame, textvariable=self.output_path, state="readonly")
+        path_entry.grid(row=1, column=0, padx=10, pady=(2, 8), sticky="ew")
+        browse_btn = ttk.Button(step3_frame, text="...", command=self._browse_directory, width=4)
+        browse_btn.grid(row=1, column=1, padx=(0, 10), pady=(2, 8))
+        action_frame = ttk.Frame(step3_frame);
+        action_frame.grid(row=2, column=0, columnspan=2, pady=10, sticky="ew")
+        action_frame.columnconfigure((0, 1), weight=1)
+        self.fk_btn = ttk.Button(action_frame, text="从外键生成",
+                                 command=lambda: self._run_generation(self._execute_generate_by_fk), state="disabled")
+        self.infer_btn = ttk.Button(action_frame, text="从约定推断",
+                                    command=lambda: self._run_generation(self._execute_generate_by_inference),
+                                    state="disabled")
+        self.fk_btn.grid(row=0, column=0, padx=5, ipady=5, sticky="ew")
+        self.infer_btn.grid(row=0, column=1, padx=5, ipady=5, sticky="ew")
+        log_frame_inner = ttk.LabelFrame(parent, text="日志")
+        log_frame_inner.grid(row=1, column=0, padx=10, pady=5, sticky="nsew")
+        log_frame_inner.columnconfigure(0, weight=1)
+        log_frame_inner.rowconfigure(1, weight=1)
+        self.progress_bar = ttk.Progressbar(log_frame_inner, mode='indeterminate')
+        self.progress_bar.grid(row=0, column=0, columnspan=2, padx=10, pady=10, sticky="ew")
+        log_text_frame = ttk.Frame(log_frame_inner);
+        log_text_frame.grid(row=1, column=0, padx=10, pady=(0, 10), sticky="nsew")
+        log_text_frame.columnconfigure(0, weight=1);
+        log_text_frame.rowconfigure(0, weight=1)
+        self.log_text = tk.Text(log_text_frame, height=5, state="disabled", wrap="word", relief="solid", borderwidth=1)
+        self.log_text.grid(row=0, column=0, sticky="nsew")
+        log_scrollbar = ttk.Scrollbar(log_text_frame, orient="vertical", command=self.log_text.yview)
+        log_scrollbar.grid(row=0, column=1, sticky="ns");
+        self.log_text.config(yscrollcommand=log_scrollbar.set)
+        self.log_text.tag_config("SUCCESS", foreground="green");
+        self.log_text.tag_config("ERROR", foreground="red");
+        self.log_text.tag_config("INFO", foreground="blue")
+        log_btn_frame = ttk.Frame(log_frame_inner);
+        log_btn_frame.grid(row=1, column=1, padx=(0, 10), pady=(0, 10), sticky="ns")
+        self.clear_log_btn = ttk.Button(log_btn_frame, text="清空", command=self._clear_log)
+        self.open_file_btn = ttk.Button(log_btn_frame, text="打开", state="disabled", command=self._open_last_file)
+        self.clear_log_btn.pack(pady=5, fill="x");
+        self.open_file_btn.pack(pady=5, fill="x")
+
+    # --- 3. 核心逻辑 (不变) ---
     def _on_db_type_changed(self, event=None):
         is_sqlite = self.db_type.get() == "SQLite"
         for key in ["主机", "端口", "用户名", "密码"]: getattr(self, f"entry_{key}").config(
             state="disabled" if is_sqlite else "normal")
-
         self.db_search_var.set("")
         self.db_search_entry.config(state="disabled")
         self.db_listbox.delete(0, tk.END)
         self.db_listbox.config(state="disabled")
-
         self.fetch_tables_btn.config(state="disabled")
         self.table_search_var.set("")
         self.table_search_entry.config(state="disabled")
         self.table_listbox.delete(0, tk.END)
         self.table_listbox.config(state="disabled")
-
         self.fk_btn.config(state="disabled");
         self.infer_btn.config(state="disabled")
-
         if is_sqlite:
             self.connect_btn.config(text="📁 选择文件并加载表", command=self._browse_and_load_sqlite)
         else:
@@ -419,20 +407,14 @@ class UltimateBeautifiedApp(tk.Tk):
             return
         self._run_threaded(lambda: gen_method(selected_db, selected_tables))
 
-    # --- BUG修复点 (核心) ---
     def _on_database_selected(self, event=None):
-        # 1. 先重置下游UI的状态
         self.table_search_var.set("")
         self.table_search_entry.config(state="disabled")
         self.table_listbox.delete(0, tk.END)
         self.table_listbox.config(state="disabled")
         self.fk_btn.config(state="disabled")
         self.infer_btn.config(state="disabled")
-
-        # 2. 激活“获取/刷新”按钮，并**立即调用其功能**
         self.fetch_tables_btn.config(state="normal")
-
-        # 3. 移除之前的if判断，无论是什么数据库类型，选中后都自动加载表列表
         self._on_fetch_tables_button_click()
 
     def _get_selected_tables(self):
@@ -473,10 +455,9 @@ class UltimateBeautifiedApp(tk.Tk):
 
     def _populate_db_listbox(self, db_names):
         self.full_db_list = sorted(db_names)
-        self.db_search_var.set("")  # 这会触发_filter_db_list来填充列表
+        self.db_search_var.set("")
         self.db_listbox.config(state="normal")
         self.db_search_entry.config(state="normal")
-
         if db_names:
             self._log(f"✅ 成功获取 {len(db_names)} 个数据库。", "SUCCESS")
         else:
@@ -503,8 +484,7 @@ class UltimateBeautifiedApp(tk.Tk):
 
     def _populate_table_listbox(self, table_names):
         self.full_table_list = sorted(table_names)
-        self.table_search_var.set("")  # 这会触发_filter_table_list来填充列表
-
+        self.table_search_var.set("")
         if table_names:
             self._log(f"✅ 成功获取 {len(table_names)} 个表。", "SUCCESS")
             self._select_all_tables()
@@ -518,6 +498,7 @@ class UltimateBeautifiedApp(tk.Tk):
             self.table_search_entry.config(state="disabled")
             self.fk_btn.config(state="disabled");
             self.infer_btn.config(state="disabled")
+        self._filter_table_list()
 
     def _filter_table_list(self, *args):
         search_term = self.table_search_var.get().lower()
@@ -558,7 +539,6 @@ class UltimateBeautifiedApp(tk.Tk):
             for tbl_name in all_tables_in_db:
                 tables_metadata[tbl_name] = {'cols': [c['name'] for c in inspector.get_columns(tbl_name)],
                                              'pks': inspector.get_pk_constraint(tbl_name)['constrained_columns']}
-
             self._log("正在根据命名约定推断关系...", "INFO")
             for t_name in selected_tables:
                 info = tables_metadata.get(t_name, {})
@@ -597,7 +577,6 @@ class UltimateBeautifiedApp(tk.Tk):
     def __update_controls_state(self, state):
         final_state = "normal" if state == "normal" else "disabled"
         is_sqlite = self.db_type.get() == "SQLite"
-
         if final_state == "disabled":
             self.progress_bar.start(10)
             self.connect_btn.config(state='disabled')
@@ -607,12 +586,10 @@ class UltimateBeautifiedApp(tk.Tk):
         else:
             self.progress_bar.stop()
             self.connect_btn.config(state='normal')
-
             if self._get_selected_db():
                 self.fetch_tables_btn.config(state='normal')
             else:
                 self.fetch_tables_btn.config(state='disabled')
-
             if self.table_listbox.size() > 0:
                 self.fk_btn.config(state='normal')
                 self.infer_btn.config(state='normal')
@@ -709,6 +686,175 @@ class UltimateBeautifiedApp(tk.Tk):
         color_code = colorchooser.askcolor(title="选择颜色", initialcolor=initial_color)
         if color_code and color_code[1]:
             self.graph_style[key].set(color_code[1])
+
+    # --- 4. AI Query Generator 功能 (全新重构) ---
+    def _create_ai_query_panel(self, parent):
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(1, weight=2)
+        parent.rowconfigure(3, weight=3)
+        input_frame = ttk.LabelFrame(parent, text=" ❶ 粘贴目标数据结构 (JSON 或 Java DTO/VO) ")
+        input_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
+        input_frame.columnconfigure(0, weight=1);
+        input_frame.rowconfigure(0, weight=1)
+        self.ai_query_input_text = tk.Text(input_frame, wrap="word", relief="solid", borderwidth=1, undo=True)
+        self.ai_query_input_text.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
+        input_scrollbar = ttk.Scrollbar(input_frame, orient="vertical", command=self.ai_query_input_text.yview)
+        input_scrollbar.grid(row=0, column=1, sticky="ns");
+        self.ai_query_input_text.config(yscrollcommand=input_scrollbar.set)
+        self.ai_query_input_text.insert(1.0, '''// 示例: 提供一个包含了一对多关系的Java DTO
+public class DishVO implements Serializable {
+    private Long id;
+    private String name;
+    private Long categoryId;
+    private String categoryName; // 需要通过categoryId关联category表查询
+    private List<DishFlavor> flavors; // 需要关联dish_flavor表
+}
+
+public class DishFlavor implements Serializable {
+    private Long id;
+    private Long dishId; // 外键
+    private String name;
+    private String value;
+}
+''')
+        action_frame = ttk.Frame(parent)
+        action_frame.grid(row=2, column=0, padx=10, pady=5, sticky="ew")
+        action_frame.columnconfigure(0, weight=1)
+        gen_button = ttk.Button(action_frame, text="🚀 生成 SELECT 查询语句",
+                                command=self._run_ai_query_generation_threaded, style="Accent.TButton")
+        gen_button.pack(side="left", fill="x", expand=True, ipady=5)
+        output_frame = ttk.LabelFrame(parent, text=" ❷ 生成的SQL查询语句 ")
+        output_frame.grid(row=3, column=0, padx=10, pady=5, sticky="nsew")
+        output_frame.columnconfigure(0, weight=1);
+        output_frame.rowconfigure(0, weight=1)
+        self.ai_query_output_text = tk.Text(output_frame, wrap="word", relief="solid", borderwidth=1, state="disabled")
+        self.ai_query_output_text.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
+        output_scrollbar = ttk.Scrollbar(output_frame, orient="vertical", command=self.ai_query_output_text.yview)
+        output_scrollbar.grid(row=0, column=1, sticky="ns");
+        self.ai_query_output_text.config(yscrollcommand=output_scrollbar.set)
+        copy_button = ttk.Button(output_frame, text="复制", command=self._copy_ai_query_to_clipboard)
+        copy_button.grid(row=1, column=0, columnspan=2, padx=5, pady=5, sticky="e")
+
+    def _copy_ai_query_to_clipboard(self):
+        sql = self.ai_query_output_text.get(1.0, tk.END).strip()
+        if sql:
+            self.clipboard_clear()
+            self.clipboard_append(sql)
+            messagebox.showinfo("成功", "SQL查询已复制到剪贴板！", parent=self)
+        else:
+            messagebox.showwarning("警告", "没有内容可复制。", parent=self)
+
+    def _run_ai_query_generation_threaded(self):
+        if not self._get_selected_db():
+            messagebox.showerror("错误", "请先在左侧连接并选择一个数据库。", parent=self)
+            return
+        api_key = self.zhipu_api_key.get()
+        if not api_key:
+            messagebox.showerror("缺少API Key", "请在'样式与配置'选项卡中输入您的ZhipuAI API Key。", parent=self)
+            return
+        target_structure = self.ai_query_input_text.get(1.0, tk.END).strip()
+        if not target_structure:
+            messagebox.showerror("错误", "目标数据结构不能为空！", parent=self)
+            return
+        self.progress_bar.start(10)
+        self._log(f"正在为数据库 '{self._get_selected_db()}' 生成查询...", "INFO")
+        thread = threading.Thread(target=self._execute_ai_query_generation, args=(api_key, target_structure),
+                                  daemon=True)
+        thread.start()
+
+    def _get_database_schema_as_text(self):
+        db_name = self._get_selected_db()
+        if not db_name: return None
+        try:
+            engine = self._create_db_engine(db_name_override=db_name)
+            inspector = inspect(engine)
+            schema_text = ""
+            table_names = inspector.get_table_names()
+            for table_name in table_names:
+                schema_text += f"表 `{table_name}` 的字段:\n"
+                columns = inspector.get_columns(table_name)
+                for col in columns:
+                    schema_text += f"- `{col['name']}` ({col['type']})\n"
+                schema_text += "\n"
+            return schema_text
+        except Exception as e:
+            self._handle_error(e, "获取数据库结构失败")
+            return None
+
+    def _execute_ai_query_generation(self, api_key, target_structure):
+        schema_text = self._get_database_schema_as_text()
+        if not schema_text:
+            self.after(0, self.progress_bar.stop)
+            return
+
+        try:
+            client = ZhipuAI(api_key=api_key)
+            system_prompt = f"""
+            你是一位顶级的SQL专家，精通MySQL, PostgreSQL等数据库。你的任务是根据用户提供的数据库表结构（Schema）和期望的数据结构（Target Structure），编写一条高效的SQL `SELECT` 查询语句。
+
+            **核心指令:**
+            1.  **理解关系**: 仔细分析数据库结构，智能地推断表之间的主外键关联关系（例如，`users.id` 和 `posts.user_id`），即使没有明确的注释。
+            2.  **字段映射**: 使用 `AS` 关键字将查询结果的字段重命名，使其与期望数据结构中的字段名完全匹配（注意大小写和下划线到驼峰的转换，如 `user_name` AS `userName`）。
+            3.  **处理一对多关系 (最重要)**:
+                - 当期望结构中包含列表或数组时（如 `List<Flavor>`），你必须使用JSON聚合函数来处理这种一对多关系。
+                - 对于MySQL 8+或PostgreSQL，优先使用 `JSON_ARRAYAGG(JSON_OBJECT(...))` 将关联的子表记录聚合成一个JSON数组。
+                - 这通常需要在一个子查询或者 `LEFT JOIN` 后的 `GROUP BY` 语句中完成。
+            4.  **最终输出**: 你的最终输出**必须且只能是**一条格式化好的SQL查询语句，不要包含任何解释、注释或Markdown标记 (例如 ```sql)。
+
+            **一对多关系处理示例:**
+            - **数据库有**: `dish` 表和 `dish_flavor` 表 (`dish_flavor.dish_id` 关联 `dish.id`)
+            - **期望结构有**: `List<DishFlavor> flavors`
+            - **你应该生成的SQL片段可能像这样**:
+              ```sql
+              (SELECT JSON_ARRAYAGG(JSON_OBJECT('id', df.id, 'name', df.name, 'value', df.value)) FROM dish_flavor df WHERE df.dish_id = d.id) AS flavors
+              ```
+
+            现在，开始分析并生成查询。
+            """
+
+            user_prompt = f"""
+            --- 数据库结构 ---
+            {schema_text}
+
+            --- 期望的数据结构 ---
+            {target_structure}
+            """
+
+            response = client.chat.completions.create(
+                model="glm-4.5",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                thinking={
+                    "type": "disabled",  # 启用深度思考模式
+                },
+            )
+
+            # --- 致命错误修正 ---
+            # API返回的choices是一个列表，必须通过索引访问第一个结果
+            result_sql = response.choices[0].message.content
+
+            cleaned_sql = re.sub(r'```sql\n?|```', '', result_sql).strip()
+
+            self.after(0, self._update_ai_query_output, cleaned_sql)
+            self._log("✅ ZhipuAI 查询生成成功！", "SUCCESS")
+
+        except Exception as e:
+            error_details = f"{type(e).__name__}: {e}"
+            self._log(f"❌ ZhipuAI 查询生成失败: {error_details}", "ERROR")
+            if 'response' in locals() and response:
+                self._log(f"--- API 原始返回 (可能包含错误信息) ---\n{response}\n---------------------------------",
+                          "ERROR")
+            self.after(0, messagebox.showerror, "AI生成失败", f"调用大模型时发生错误:\n\n{error_details}")
+        finally:
+            self.after(0, self.progress_bar.stop)
+
+    def _update_ai_query_output(self, sql):
+        self.ai_query_output_text.config(state="normal")
+        self.ai_query_output_text.delete(1.0, tk.END)
+        self.ai_query_output_text.insert(1.0, sql)
+        self.ai_query_output_text.config(state="disabled")
 
 
 if __name__ == "__main__":
