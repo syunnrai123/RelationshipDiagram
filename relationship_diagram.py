@@ -16,6 +16,14 @@ except ImportError:
     messagebox.showerror("缺少库", "未找到 'zhipuai' 库。\n请通过 'pip install zhipuai' 安装。")
     sys.exit()
 
+# --- ORACLE SUPPORT: Add dependency check for the Oracle driver ---
+try:
+    import oracledb
+except ImportError:
+    # This is a soft check. If the user tries to connect to Oracle without the driver,
+    # SQLAlchemy will raise a more specific error.
+    pass
+
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -66,7 +74,9 @@ class UltimateBeautifiedApp(tk.Tk):
         self.table_listbox = None
         self.full_db_list = []
         self.full_table_list = []
-        self.db_dialect_map = {"MySQL": "mysql+pymysql", "PostgreSQL": "postgresql+psycopg2", "SQLite": "sqlite"}
+        # --- ORACLE SUPPORT: Add Oracle dialect to the map ---
+        self.db_dialect_map = {"MySQL": "mysql+pymysql", "PostgreSQL": "postgresql+psycopg2", "SQLite": "sqlite",
+                               "Oracle": "oracle+oracledb"}
         self.graph_style = {'layout': tk.StringVar(), 'spline': tk.StringVar(), 'bg_color': tk.StringVar(),
                             'node_color_default': tk.StringVar(), 'node_color_start': tk.StringVar(),
                             'node_color_link': tk.StringVar(), 'node_color_end': tk.StringVar()}
@@ -77,7 +87,6 @@ class UltimateBeautifiedApp(tk.Tk):
         self.ai_model_var = tk.StringVar(value="glm-4.5-flash")
         self.right_panel_view = tk.StringVar(value="ai")
 
-        # --- NEW: MySQL version selection for AI ---
         self.mysql_version_var = tk.StringVar(value="MySQL 8.0+")
 
         self.is_ai_running = False
@@ -187,8 +196,14 @@ class UltimateBeautifiedApp(tk.Tk):
         self.db_type_combo.grid(row=0, column=1, columnspan=2, padx=10, pady=8, sticky="ew")
         self.db_type_combo.bind("<<ComboboxSelected>>", self._on_db_type_changed)
 
+        # --- ORACLE SUPPORT: Create a label that can be dynamically changed ---
+        self.database_label = ttk.Label(step1_frame, text="数据库:")
+        self.database_label.grid(row=5, column=0, padx=10, pady=5, sticky="w")
+        self.database_entry = ttk.Entry(step1_frame)
+        self.database_entry.grid(row=5, column=1, columnspan=2, padx=10, pady=5, sticky="ew")
+        self.db_entries['数据库'] = self.database_entry
+
         labels = ["主机:", "端口:", "用户名:", "密码:"]
-        self.db_entries['数据库'] = ttk.Entry(parent)
         for i, label_text in enumerate(labels, 1):
             key = label_text.strip(':');
             ttk.Label(step1_frame, text=label_text).grid(row=i, column=0, padx=10, pady=5, sticky="w")
@@ -198,7 +213,7 @@ class UltimateBeautifiedApp(tk.Tk):
             setattr(self, f"entry_{key}", entry)
 
         self.sqlite_file_frame = ttk.Frame(step1_frame)
-        self.sqlite_file_frame.grid(row=len(labels) + 1, column=0, columnspan=3, padx=10, pady=5, sticky="ew")
+        self.sqlite_file_frame.grid(row=len(labels) + 2, column=0, columnspan=3, padx=10, pady=5, sticky="ew")
         self.sqlite_file_frame.columnconfigure(1, weight=1)
         ttk.Label(self.sqlite_file_frame, text="SQLite 文件:").grid(row=0, column=0, sticky="w")
         self.sqlite_path_entry = ttk.Entry(self.sqlite_file_frame, state="readonly")
@@ -208,7 +223,7 @@ class UltimateBeautifiedApp(tk.Tk):
 
         self.connect_btn = ttk.Button(step1_frame, text="🔗 连接并加载数据库", command=self._fetch_database_list,
                                       style="Accent.TButton")
-        self.connect_btn.grid(row=len(labels) + 2, column=0, columnspan=3, padx=10, pady=10, sticky="ew")
+        self.connect_btn.grid(row=len(labels) + 3, column=0, columnspan=3, padx=10, pady=10, sticky="ew")
 
         step2_frame = ttk.LabelFrame(parent, text=" ❷ 选择数据库和表")
         step2_frame.grid(row=1, column=0, padx=(10, 0), pady=5, sticky="nsew")
@@ -219,7 +234,10 @@ class UltimateBeautifiedApp(tk.Tk):
         db_area_frame.grid(row=0, column=0, rowspan=2, padx=(10, 5), pady=5, sticky="nsew")
         db_area_frame.columnconfigure(0, weight=1)
         db_area_frame.rowconfigure(1, weight=1)
-        ttk.Label(db_area_frame, text="数据库列表").grid(row=0, column=0, sticky='w', pady=(0, 5))
+
+        # --- ORACLE SUPPORT: Create a label for the listbox title that can be changed ---
+        self.db_list_label = ttk.Label(db_area_frame, text="数据库列表")
+        self.db_list_label.grid(row=0, column=0, sticky='w', pady=(0, 5))
 
         db_search_frame = ttk.Frame(db_area_frame)
         db_search_frame.grid(row=0, column=0, padx=0, pady=5, sticky="ew")
@@ -349,7 +367,6 @@ class UltimateBeautifiedApp(tk.Tk):
         model_combo.grid(row=0, column=1, padx=0, pady=8, sticky="ew")
         ToolTip(model_combo, "选择预设模型或手动输入新模型名称")
 
-        # --- NEW: MySQL Version Selector ---
         self.mysql_version_label = ttk.Label(config_frame, text="MySQL 版本:")
         self.mysql_version_label.grid(row=1, column=0, padx=(10, 5), pady=8, sticky="w")
         self.mysql_version_combo = ttk.Combobox(config_frame, textvariable=self.mysql_version_var, state="readonly",
@@ -506,7 +523,6 @@ public class DishFlavor implements Serializable {
         self.clear_log_btn.pack(pady=5, fill="x");
         self.open_file_btn.pack(pady=5, fill="x")
 
-    # --- NEW: Method to show/hide MySQL version selector ---
     def _update_ai_panel_visibility(self):
         if self.db_type.get() == "MySQL":
             self.mysql_version_label.grid()
@@ -516,10 +532,17 @@ public class DishFlavor implements Serializable {
             self.mysql_version_combo.grid_remove()
 
     def _on_db_type_changed(self, event=None):
-        is_sqlite = self.db_type.get() == "SQLite"
-        for key in ["主机", "端口", "用户名", "密码"]:
-            getattr(self, f"entry_{key}").config(state="disabled" if is_sqlite else "normal")
+        # --- ORACLE SUPPORT: Adapt UI based on selected DB type ---
+        db_type = self.db_type.get()
+        is_sqlite = db_type == "SQLite"
+        is_oracle = db_type == "Oracle"
 
+        # Manage visibility of regular connection entries
+        for key in ["主机", "端口", "用户名", "密码"]:
+            state = "disabled" if is_sqlite else "normal"
+            getattr(self, f"entry_{key}").config(state=state)
+
+        # Manage SQLite specific widgets
         if is_sqlite:
             self.sqlite_file_frame.grid()
             self.connect_btn.config(text="🔗 加载表", command=self._on_database_selected)
@@ -527,6 +550,20 @@ public class DishFlavor implements Serializable {
             self.sqlite_file_frame.grid_remove()
             self.connect_btn.config(text="🔗 连接并加载数据库", command=self._fetch_database_list)
 
+        # Manage Oracle specific widgets and labels
+        if is_oracle:
+            self.database_label.config(text="服务名:")
+            self.database_label.grid()
+            self.database_entry.grid()
+            self.db_list_label.config(text="Schema 列表")
+        else:
+            self.db_list_label.config(text="数据库列表")
+            # Hide the database entry for non-Oracle, non-SQLite types as it's not used
+            if not is_sqlite:
+                self.database_label.grid_remove()
+                self.database_entry.grid_remove()
+
+        # Reset lists and buttons
         self.db_search_var.set("")
         self.db_search_entry.config(state="disabled")
         self.db_listbox.delete(0, tk.END)
@@ -538,7 +575,6 @@ public class DishFlavor implements Serializable {
         self.table_listbox.config(state="disabled")
         self.generate_menu_btn.config(state="disabled")
 
-        # --- MODIFICATION: Update AI panel when DB type changes ---
         self._update_ai_panel_visibility()
 
     def _browse_sqlite_file(self):
@@ -579,7 +615,7 @@ public class DishFlavor implements Serializable {
     def _on_fetch_tables_button_click(self):
         db_name = self._get_selected_db()
         if not db_name:
-            messagebox.showwarning("提示", "请先从数据库列表中选择一个数据库。")
+            messagebox.showwarning("提示", "请先从列表中选择一个数据库或Schema。")
             return
         self._run_threaded(self._execute_fetch_tables, args=(db_name,))
 
@@ -587,7 +623,7 @@ public class DishFlavor implements Serializable {
         selected_db = self._get_selected_db()
         selected_tables = self._get_selected_tables()
         if not selected_db or not selected_tables:
-            self.after(0, lambda: messagebox.showwarning("操作中止", "请先选择一个数据库和至少一个表。"))
+            self.after(0, lambda: messagebox.showwarning("操作中止", "请先选择一个数据库(或Schema)和至少一个表。"))
             return
         self._run_threaded(lambda: gen_method(selected_db, selected_tables))
 
@@ -626,9 +662,21 @@ public class DishFlavor implements Serializable {
                     db_names = [r[0] for r in result]
                     ignored = ['information_schema', 'mysql', 'performance_schema', 'sys']
                     db_names = [d for d in db_names if d not in ignored]
-                else:
+                else:  # Handles PostgreSQL and Oracle
                     db_names = inspector.get_schema_names()
-                    ignored = ['information_schema', 'pg_catalog', 'pg_toast']
+                    ignored = []
+                    if engine.dialect.name == 'postgresql':
+                        ignored = ['information_schema', 'pg_catalog', 'pg_toast']
+                    # --- ORACLE SUPPORT: Filter out Oracle system schemas ---
+                    elif engine.dialect.name == 'oracle':
+                        ignored = [
+                            'ANONYMOUS', 'APEX_PUBLIC_USER', 'APPQOSSYS', 'AUDSYS', 'CTXSYS',
+                            'DBSFWUSER', 'DBSNMP', 'DIP', 'GGSYS', 'GSMADMIN_INTERNAL',
+                            'GSMCATUSER', 'GSMUSER', 'LBACSYS', 'MDSYS', 'OJVMSYS', 'OLAPSYS',
+                            'ORACLE_OCM', 'ORDDATA', 'ORDPLUGINS', 'ORDSYS', 'OUTLN',
+                            'REMOTE_SCHEDULER_AGENT', 'SYS', 'SYSBACKUP', 'SYSDG', 'SYSKM',
+                            'SYSRAC', 'SYSTEM', 'WMSYS', 'XDB', 'XS$NULL'
+                        ]
                     db_names = [s for s in db_names if s not in ignored]
                 self.after(0, self._populate_db_listbox, db_names)
         except Exception as e:
@@ -645,9 +693,10 @@ public class DishFlavor implements Serializable {
         for name in self.full_db_list:
             self.db_listbox.insert(tk.END, name)
         if db_names:
-            self._log(f"✅ 成功获取 {len(db_names)} 个数据库。", "SUCCESS")
+            log_item = "数据库" if self.db_type.get() != "Oracle" else "Schema"
+            self._log(f"✅ 成功获取 {len(db_names)} 个{log_item}。", "SUCCESS")
         else:
-            self._log("⚠️ 未找到任何用户数据库。", "ERROR")
+            self._log("⚠️ 未找到任何用户数据库或Schema。", "ERROR")
 
     def _filter_db_list(self, *args):
         search_term = self.db_search_var.get().lower()
@@ -657,11 +706,13 @@ public class DishFlavor implements Serializable {
                 self.db_listbox.insert(tk.END, name)
 
     def _execute_fetch_tables(self, db_name):
-        self._log(f"正在从数据库 '{db_name}' 获取表列表...", "INFO")
+        self._log(f"正在从 '{db_name}' 获取表列表...", "INFO")
         try:
             engine = self._create_db_engine(db_name_override=db_name)
             inspector = inspect(engine)
-            table_names = inspector.get_table_names()
+            # --- ORACLE SUPPORT: Pass schema name to inspector methods ---
+            schema_arg = {'schema': db_name} if self.db_type.get() == "Oracle" else {}
+            table_names = inspector.get_table_names(**schema_arg)
             self.after(0, self._populate_table_listbox, table_names)
         except Exception as e:
             self._handle_error(e, "获取表失败")
@@ -679,7 +730,7 @@ public class DishFlavor implements Serializable {
             self.table_search_entry.config(state="normal")
             self.generate_menu_btn.config(state="normal")
         else:
-            self._log("⚠️ 未在该数据库中找到任何表。", "ERROR")
+            self._log("⚠️ 未在该数据库或Schema中找到任何表。", "ERROR")
             self.table_listbox.config(state="disabled")
             self.table_search_entry.config(state="disabled")
             self.generate_menu_btn.config(state="disabled")
@@ -698,12 +749,14 @@ public class DishFlavor implements Serializable {
     def _execute_generate_by_fk(self, db_name, selected_tables):
         try:
             self._log("--- 开始基于外键生成 ---", "INFO")
-            engine, inspector = self._create_db_engine(db_name_override=db_name), inspect(
-                self._create_db_engine(db_name_override=db_name))
+            engine = self._create_db_engine(db_name_override=db_name)
+            inspector = inspect(engine)
             relations = []
             self._log(f"正在分析 {len(selected_tables)} 个选定表的外键...", "INFO")
+            # --- ORACLE SUPPORT: Pass schema name to inspector methods ---
+            schema_arg = {'schema': db_name} if self.db_type.get() == "Oracle" else {}
             for table_name in selected_tables:
-                for fk in inspector.get_foreign_keys(table_name):
+                for fk in inspector.get_foreign_keys(table_name, **schema_arg):
                     if fk['referred_table'] in selected_tables and fk['constrained_columns'] and fk['referred_columns']:
                         relations.append(
                             (table_name, fk['constrained_columns'][0], fk['referred_table'], fk['referred_columns'][0]))
@@ -717,12 +770,17 @@ public class DishFlavor implements Serializable {
         try:
             self._log("--- 开始基于约定推断 ---", "INFO")
             engine = self._create_db_engine(db_name_override=db_name)
-            inspector, tables_metadata, relations = inspect(engine), {}, []
+            inspector = inspect(engine)
+            tables_metadata, relations = {}, []
             self._log("正在获取所有表的元数据以供推断...", "INFO")
-            all_tables_in_db = inspector.get_table_names()
+            # --- ORACLE SUPPORT: Pass schema name to inspector methods ---
+            schema_arg = {'schema': db_name} if self.db_type.get() == "Oracle" else {}
+            all_tables_in_db = inspector.get_table_names(**schema_arg)
             for tbl_name in all_tables_in_db:
-                tables_metadata[tbl_name] = {'cols': [c['name'] for c in inspector.get_columns(tbl_name)],
-                                             'pks': inspector.get_pk_constraint(tbl_name)['constrained_columns']}
+                tables_metadata[tbl_name] = {
+                    'cols': [c['name'] for c in inspector.get_columns(tbl_name, **schema_arg)],
+                    'pks': inspector.get_pk_constraint(tbl_name, **schema_arg)['constrained_columns']
+                }
             self._log("正在根据命名约定推断关系...", "INFO")
             for t_name in selected_tables:
                 info = tables_metadata.get(t_name, {})
@@ -745,24 +803,40 @@ public class DishFlavor implements Serializable {
             self._toggle_controls("normal")
 
     def _create_db_engine(self, use_db_name=True, db_name_override=None):
-        db_type, details = self.db_type.get(), {k: v.get() for k, v in self.db_entries.items()}
+        # --- ORACLE SUPPORT: Handle Oracle connection string separately ---
+        db_type = self.db_type.get()
+        details = {k: v.get() for k, v in self.db_entries.items()}
         dialect = self.db_dialect_map.get(db_type)
-        if not dialect: raise ValueError(f"不支持的数据库类型: {db_type}")
+        if not dialect:
+            raise ValueError(f"不支持的数据库类型: {db_type}")
+
         if db_type == "SQLite":
             path = self._get_selected_db()
-            if not path: raise ValueError("SQLite需要指定数据库文件路径。")
+            if not path:
+                raise ValueError("SQLite需要指定数据库文件路径。")
             return create_engine(f"sqlite:///{path}")
-        else:
-            db_name = db_name_override if use_db_name else ""
-            if not use_db_name and not db_name_override:
-                db_name = ''
-            elif db_name_override:
-                db_name = db_name_override
-            else:
-                db_name = details.get('数据库', '')
+
+        elif db_type == "Oracle":
+            service_name = details.get('数据库', '')  # We reuse the '数据库' entry for service name
+            if not service_name:
+                raise ValueError("Oracle连接需要服务名(Service Name)。")
+            # Using a DSN with service_name is the most reliable way
+            dsn = f"{details['主机']}:{details['端口']}/?service_name={service_name}"
+            url = f"oracle+oracledb://{details['用户名']}:{details['密码']}@{dsn}"
+            return create_engine(url)
+
+        else:  # MySQL and PostgreSQL
+            # For these, we connect without a db name first to list them
+            db_name = ""
+            if use_db_name:
+                if db_name_override:
+                    db_name = db_name_override
+                else:  # Fallback for initial state, should not be used for table listing
+                    db_name = details.get('数据库', '')
 
             return create_engine(
-                f"{dialect}://{details['用户名']}:{details['密码']}@{details['主机']}:{details['端口']}/{db_name}")
+                f"{dialect}://{details['用户名']}:{details['密码']}@{details['主机']}:{details['端口']}/{db_name}"
+            )
 
     def _toggle_controls(self, state="normal"):
         self.after(0, self.__update_controls_state, state)
@@ -916,7 +990,7 @@ public class DishFlavor implements Serializable {
             messagebox.showinfo("提示", "AI正在运行，请稍候...", parent=self)
             return
         if not self._get_selected_db():
-            messagebox.showerror("错误", "请先在左侧连接并选择一个数据库。", parent=self)
+            messagebox.showerror("错误", "请先在左侧连接并选择一个数据库或Schema。", parent=self)
             return
         api_key = self.zhipu_api_key.get()
         if not api_key:
@@ -929,7 +1003,8 @@ public class DishFlavor implements Serializable {
             return
 
         self.progress_bar.start(10)
-        self._log(f"正在为数据库 '{self._get_selected_db()}' 生成查询...", "INFO")
+        log_item = "数据库" if self.db_type.get() != "Oracle" else "Schema"
+        self._log(f"正在为{log_item} '{self._get_selected_db()}' 生成查询...", "INFO")
 
         self.is_ai_running = True
         self._animate_ai_loading()
@@ -942,32 +1017,53 @@ public class DishFlavor implements Serializable {
         db_name = self._get_selected_db()
         if not db_name: return None
         try:
-            self._log(f"正在为AI获取 '{db_name}' 的数据库结构...", "INFO")
+            self._log(f"正在为AI获取 '{db_name}' 的结构...", "INFO")
             engine = self._create_db_engine(db_name_override=db_name)
             inspector = inspect(engine)
             schema_text = ""
             selected_tables = self._get_selected_tables()
-            if not selected_tables:
-                self._log("未选择任何表作为AI上下文，将使用数据库中的所有表。", "INFO")
-                selected_tables = inspector.get_table_names()
 
-            schema_text += f"当前选择的数据库是 '{db_name}'。请基于以下选定的表结构生成查询:\n\n"
+            # --- ORACLE SUPPORT: Pass schema name to inspector methods ---
+            schema_arg = {'schema': db_name} if self.db_type.get() == "Oracle" else {}
+
+            if not selected_tables:
+                self._log("未选择任何表作为AI上下文，将使用Schema中的所有表。", "INFO")
+                selected_tables = inspector.get_table_names(**schema_arg)
+
+            log_item = "数据库" if self.db_type.get() != "Oracle" else "Schema"
+            schema_text += f"当前选择的{log_item}是 '{db_name}'。请基于以下选定的表结构生成查询:\n\n"
 
             for table_name in selected_tables:
-                schema_text += f"表 `{table_name}` 的字段:\n"
-                columns = inspector.get_columns(table_name)
+                # --- ORACLE SUPPORT: Use uppercase for Oracle table names in prompt for clarity ---
+                display_table_name = table_name.upper() if self.db_type.get() == "Oracle" else f"`{table_name}`"
+                schema_text += f"表 {display_table_name} 的字段:\n"
+                columns = inspector.get_columns(table_name, **schema_arg)
                 for col in columns:
-                    schema_text += f"- `{col['name']}` ({col['type']})\n"
+                    display_col_name = col['name'].upper() if self.db_type.get() == "Oracle" else f"`{col['name']}`"
+                    schema_text += f"- {display_col_name} ({col['type']})\n"
 
-                pk_constraint = inspector.get_pk_constraint(table_name)
+                pk_constraint = inspector.get_pk_constraint(table_name, **schema_arg)
                 if pk_constraint and pk_constraint['constrained_columns']:
-                    schema_text += f"  主键: ({', '.join(pk_constraint['constrained_columns'])})\n"
+                    pks = pk_constraint['constrained_columns']
+                    display_pks = [pk.upper() for pk in pks] if self.db_type.get() == "Oracle" else [f"`{pk}`" for pk in
+                                                                                                     pks]
+                    schema_text += f"  主键: ({', '.join(display_pks)})\n"
 
-                fks = inspector.get_foreign_keys(table_name)
+                fks = inspector.get_foreign_keys(table_name, **schema_arg)
                 if fks:
                     schema_text += "  外键:\n"
                     for fk in fks:
-                        schema_text += f"  - `{', '.join(fk['constrained_columns'])}` 引用 `{fk['referred_table']}` (`{', '.join(fk['referred_columns'])}`)\n"
+                        cols = fk['constrained_columns']
+                        ref_tbl = fk['referred_table']
+                        ref_cols = fk['referred_columns']
+
+                        display_cols = [c.upper() for c in cols] if self.db_type.get() == "Oracle" else [f"`{c}`" for c
+                                                                                                         in cols]
+                        display_ref_tbl = ref_tbl.upper() if self.db_type.get() == "Oracle" else f"`{ref_tbl}`"
+                        display_ref_cols = [c.upper() for c in ref_cols] if self.db_type.get() == "Oracle" else [
+                            f"`{c}`" for c in ref_cols]
+
+                        schema_text += f"  - ({', '.join(display_cols)}) 引用 {display_ref_tbl} ({', '.join(display_ref_cols)})\n"
                 schema_text += "\n"
 
             self._log("✅ 成功获取数据库结构。", "SUCCESS")
@@ -986,9 +1082,31 @@ public class DishFlavor implements Serializable {
 
         try:
             client = ZhipuAI(api_key=api_key)
+            system_prompt = ""
+            db_type = self.db_type.get()
 
-            # --- MODIFICATION: Dynamically choose prompt based on user selection ---
-            if self.db_type.get() == "MySQL" and self.mysql_version_var.get() == "MySQL 5.7":
+            # --- ORACLE SUPPORT: Add a dedicated prompt for Oracle ---
+            if db_type == "Oracle":
+                system_prompt = f"""
+                你是一位顶级的SQL专家，专门为 **Oracle** 数据库编写查询。你的任务是根据用户提供的数据库表结构（Schema）和期望的数据结构（Target Structure），编写一条高效且兼容的SQL `SELECT` 查询语句。
+                **核心指令:**
+                1.  **理解关系**: 仔细分析数据库结构，智能地推断表之间的主外键关联关系。Oracle中的表名和字段名在数据字典中通常是大写的。
+                2.  **字段映射**: 使用 `AS` 关键字将查询结果的字段重命名，使其与期望数据结构中的字段名完全匹配。 **重要**: 为了在结果中保持驼峰式命名的大小写，必须为别名加上双引号 (例如 `USER_NAME AS "userName"`)。
+                3.  **处理一对多关系 (最重要)**:
+                    - 当期望结构中包含列表或数组时（如 `List<Flavor>`），你必须使用Oracle的JSON函数来处理这种一对多关系。
+                    - 优先使用 `JSON_ARRAYAGG(JSON_OBJECT('key' VALUE table.column ...))` 将关联的子表记录聚合成一个JSON数组。
+                    - 这通常需要在一个子查询或者 `LEFT JOIN` 后的 `GROUP BY` 语句中完成。
+                4.  **最终输出**: 你的最终输出**必须且只能是**一条格式化好的SQL查询语句，不要包含任何解释、注释或Markdown标记 (例如 ```sql)。
+                **一对多关系处理示例:**
+                - **数据库有**: `DISH` 表和 `DISH_FLAVOR` 表 (`DISH_FLAVOR.DISH_ID` 关联 `DISH.ID`)
+                - **期望结构有**: `List<DishFlavor> flavors`
+                - **你应该生成的SQL片段可能像这样**:
+                  ```sql
+                  (SELECT JSON_ARRAYAGG(JSON_OBJECT('id' VALUE df.ID, 'name' VALUE df.NAME, 'value' VALUE df.VALUE)) FROM DISH_FLAVOR df WHERE df.DISH_ID = d.ID) AS "flavors"
+                  ```
+                现在，开始为 Oracle 分析并生成查询。
+                """
+            elif self.db_type.get() == "MySQL" and self.mysql_version_var.get() == "MySQL 5.7":
                 # Use MySQL 5.7 specific prompt
                 system_prompt = f"""
                 你是一位顶级的SQL专家，专门为 **MySQL 5.7** 数据库编写查询。你的任务是根据用户提供的数据库表结构（Schema）和期望的数据结构（Target Structure），编写一条高效且兼容的SQL `SELECT` 查询语句。
@@ -1048,15 +1166,15 @@ public class DishFlavor implements Serializable {
                 """
 
             user_prompt = f"""
-            --- 数据库结构 ---
+            --- 数据库结构 - --
             {schema_text}
-            --- 期望的数据结构 ---
+            --- 期望的数据结构 - --
             {target_structure}
             """
 
             model_to_use = self.ai_model_var.get()
-            log_msg = f"正在调用模型 '{model_to_use}'"
-            if self.db_type.get() == "MySQL":
+            log_msg = f"正在调用模型 '{model_to_use}' (数据库类型: {db_type})"
+            if db_type == "MySQL":
                 log_msg += f" (模式: {self.mysql_version_var.get()})"
             self._log(log_msg, "INFO")
 
